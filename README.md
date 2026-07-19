@@ -3,12 +3,75 @@
 An interpreter for **Kimiya**, the program logic for semantic computation
 and action with language models (the KimiyaPOPL paper) — including the
 **world-effecting extension** (`act` / `observe` / `settle` / world-frame
-retry). Programs run against a pool of **local models only** (Ollama at
-`127.0.0.1`), can read and write files, and every run ends in an explicit
-outcome: a **certificate** on commit, or a visible **⚡ abstention** —
-never silence.
+retry). Programs run against a pool of agents — **local by default**
+(Ollama at `127.0.0.1`), or remote (a vast.ai pod, OpenRouter) when
+declared, with every network egress announced and audited. Programs can
+read and write files, and every run ends in an explicit outcome: a
+**certificate** on commit, or a visible **⚡ abstention** — never silence.
 
 Zero dependencies (Python 3.11+ stdlib).
+
+## Getting started (first run)
+
+New here? Start with the **offline path** — it validates the whole
+toolchain (parser, discipline checker, type checker, compiler, and a full
+run) in about a minute, with **no models and no network**:
+
+```bash
+git clone git@github.com:phaysaal/kimiya-lang.git
+cd kimiya-lang
+python3 --version          # must be 3.11+  (see "macOS notes" below)
+
+# 1. parse + discipline checks + type checks — no models, no input files
+python3 -m kimiya check examples/grounded_summary.kim
+
+# 2. see the syntax highlighting (core = blue, world extension = magenta)
+python3 -m kimiya hl examples/agentic_digest.kim
+
+# 3. compile to a standalone Python file and read it
+python3 -m kimiya compile examples/grounded_summary.kim
+head -40 examples/grounded_summary.py
+
+# 4. run end-to-end with the offline mock oracle (deterministic, no network)
+printf 'The deadline moved to Friday.\nBudget unchanged.\n' > notes.txt
+KIMIYA_MOCK=1 python3 -m kimiya run examples/grounded_summary.kim
+```
+
+Step 4 should print a **certificate** (`status: COMMITTED`, θ, cost,
+`egress: none`). If it does, everything works.
+
+Then a **real run** against local models (Apple Silicon runs these fast
+via Metal):
+
+```bash
+brew install ollama && ollama serve        # in a separate terminal
+ollama pull llama3.1:8b                     # generator  (family: llama)
+ollama pull gemma2:9b                        # judge      (family: gemma)
+ollama pull mistral:7b                       # judge      (family: mistral)
+
+python3 -m kimiya doctor                     # expect ≥2 families ✓
+python3 -m kimiya run examples/grounded_summary.kim
+```
+
+`grounded_summary.kim` names three pools `A`/`B`/`C`; pull those model
+names or edit the three `pool` lines to match what you have. Two or more
+distinct **families** are required — one family cannot certify its own
+output (that is a theorem, not a preference). To run against OpenRouter or
+a vast.ai pod instead, see **Agents** below.
+
+### macOS notes
+
+- **Python version.** macOS's system `python3` may be 3.9. If
+  `python3 --version` is below 3.11, `brew install python@3.12` and use
+  that interpreter.
+- **Don't start with `tests/smoke_test.sh`.** It uses bash associative
+  arrays (`declare -A`, bash 4+), but macOS ships bash 3.2 — the script
+  will error. The `python3 -m kimiya …` commands above are pure Python and
+  have no such issue. If you want the smoke test, `brew install bash`
+  first.
+- **No build step.** The interpreter and the compiler are pure-stdlib
+  Python with no native code, so nothing to compile or install; clone and
+  run. The compiled `.py` artifacts only import `kimiya.compiled_runtime`.
 
 ## Commands
 
