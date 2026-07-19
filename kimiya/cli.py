@@ -75,6 +75,14 @@ def cmd_run(args):
     models = args.models.split(",") if args.models else None
     interp = Interp(prog, Path(args.file), models,
                     py_funcs=py_funcs, py_exts=py_exts)
+    remote = [a for a in interp.pool.agents if not a.is_local]
+    if remote:
+        print("⚠ network egress: this program sends prompts to remote "
+              "agents —")
+        for a in remote:
+            print(f"    {a.name} → {a.model} @ {a.host} ({a.backend})")
+        print("  (declared in source; your data leaves the machine for "
+              "these)")
     cert = interp.run()
     print()
     print("── certificate ──────────────────────────────")
@@ -92,6 +100,11 @@ def cmd_run(args):
         tag = "calibrated" if s["calibrated"] else "prior-grade"
         print(f"  instrument {task}: α≤{s['alpha_hi']:.2f} "
               f"β≥{s['beta_lo']:.2f} [{tag}]")
+    if cert["egress"]:
+        print(f"  egress : {', '.join(cert['egress'])} "
+              "(prompts left the machine)")
+    else:
+        print("  egress : none (all agents local)")
     c = cert["cost"]
     print(f"  cost   : {c['gen_calls']} gen, {c['judge_votes']} votes, "
           f"{c['acts']} acts, {c['observes']} observes, {c['seconds']}s")
@@ -122,8 +135,7 @@ def cmd_doctor(_args):
     fams: dict[str, list[str]] = {}
     for m in models:
         fams.setdefault(family_of(m), []).append(m)
-    print(f"✓ ollama at {runtime.BASE_URL} (the interpreter's only "
-          "network endpoint)")
+    print(f"✓ ollama at {runtime.BASE_URL} (default local backend)")
     print(f"✓ models: {', '.join(models)}")
     print(f"{'✓' if len(fams) >= 2 else '✗'} families: {', '.join(fams)}")
     if len(fams) < 2:

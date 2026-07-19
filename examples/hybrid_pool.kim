@@ -1,0 +1,38 @@
+-- A hybrid pool: local generation, remote judging.
+-- The generator runs on this machine; the cross-provenance judge panel
+-- spans a rented vast.ai pod (OpenAI-compatible vLLM) and OpenRouter.
+--
+-- Egress is DECLARED here and reported at run time: prompts to B and C
+-- leave the machine. A program that wants the nothing-leaves guarantee
+-- simply declares only local agents.
+
+agent A:                        -- local generator (Ollama)
+    backend = "ollama"
+    model   = "llama3.1:8b"
+
+agent B:                        -- vast.ai pod, vLLM OpenAI-compatible
+    backend = "openai"
+    model   = "Qwen/Qwen3-32B"
+    url     = "http://0.0.0.0:8000/v1"    -- your pod's mapped endpoint
+    key_env = "VAST_API_KEY"              -- optional bearer token
+
+agent C:                        -- OpenRouter, a different provider family
+    backend = "openrouter"
+    model   = "mistralai/mistral-large"
+    key_env = "OPENROUTER_API_KEY"
+
+context k_ev:
+    domain     = "grounded entailment of a claim against source notes"
+    preserve   = [evidential_support, scope]
+    allow_loss = [style, ordering]
+
+schema Answer:
+    text: text
+
+notes := observe file("notes.txt")
+e := select<0.95>("the decision and who made it", lines(notes.text)) under k_ev
+
+a := retry budget 3 until judge<5,4/5> (join(e, "\n") |= a.text) under k_ev panel [B, C]:
+    a := gen<Answer>("State, in one sentence, only what these notes say about the decision and who made it:\n" + join(e, "\n")) by A
+
+commit(a)

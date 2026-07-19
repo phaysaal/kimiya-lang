@@ -105,6 +105,13 @@ class PoolDecl:
 
 
 @dataclass
+class AgentDecl:
+    name: str
+    fields: dict          # backend, model, url, key_env, family
+    line: int = 0
+
+
+@dataclass
 class ContextDecl:
     name: str
     domain: str

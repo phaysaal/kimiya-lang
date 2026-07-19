@@ -1,0 +1,16 @@
+-- must FAIL: the remote judge is the same family as the local generator
+-- (family override makes the collision explicit) — J not-lhd C
+agent A:
+    backend = "ollama"
+    model   = "llama3.1:8b"
+agent B:
+    backend = "openrouter"
+    model   = "meta-llama/llama-3.1-70b"
+    key_env = "OPENROUTER_API_KEY"
+context k_x:
+    domain     = "d"
+    preserve   = [a]
+    allow_loss = [b]
+s := retry budget 2 until judge<3,2/3> (s |= s) under k_x panel [B]:
+    s := gen<Text>("hi") by A
+commit(s)

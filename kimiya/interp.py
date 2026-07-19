@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 from . import ast_nodes as A
-from .runtime import (Pool, Trace, Datasheets, get_oracle, run_judge,
+from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle, run_judge,
                       run_gen)
 
 
@@ -80,16 +80,26 @@ class Interp:
                     if isinstance(d, A.FnDecl)}
         self.py_funcs = py_funcs or {}
         self.py_exts = py_exts or []
-        bindings = {d.name: d.model for d in prog.decls
-                    if isinstance(d, A.PoolDecl)}
+        bindings: dict[str, Agent] = {}
+        for d in prog.decls:
+            if isinstance(d, A.PoolDecl):
+                bindings[d.name] = Agent(name=d.name, model=d.model)
+            elif isinstance(d, A.AgentDecl):
+                f = d.fields
+                bindings[d.name] = Agent(
+                    name=d.name, model=f.get("model", ""),
+                    backend=f.get("backend", "ollama"),
+                    url=f.get("url"), key_env=f.get("key_env"),
+                    family_override=f.get("family"))
         if models_override:
-            bindings = {f"M{i}": m for i, m in enumerate(models_override)}
+            bindings = {f"M{i}": Agent(name=f"M{i}", model=m)
+                        for i, m in enumerate(models_override)}
         self.pool = Pool(bindings)
         self.theta: list[tuple[str, float]] = []
         self.cost = {"gen_calls": 0, "judge_votes": 0, "acts": 0,
                      "observes": 0}
         self.uncertified = 0
-        self.last_gen_model: str | None = None
+        self.last_gen_model: Agent | None = None
         self.last_act: dict[str, float] = {}
         self.last_obs: dict[str, float] = {}
         self.committed = None
@@ -131,6 +141,12 @@ class Interp:
             "uncertified_judgments": self.uncertified,
             "instruments": {t: self.sheets.get(t) for t in tasks},
             "python_extensions": self.py_exts,
+            "agents": [{"name": a.name, "model": a.model,
+                        "backend": a.backend, "host": a.host,
+                        "family": a.family, "local": a.is_local}
+                       for a in self.pool.agents],
+            "egress": sorted({a.host for a in self.pool.agents
+                              if not a.is_local}),
             "cost": dict(self.cost, seconds=round(secs, 1)),
             "trace_records": self.trace.count(),
         }
@@ -189,9 +205,9 @@ class Interp:
     # ------------------------------------------------ gen / select
     def eval_gen(self, g: A.GenExpr):
         prompt = self.to_str(self.eval(g.prompt))
-        model = (self.pool.model(g.by) if g.by
+        agent = (self.pool.agent(g.by) if g.by
                  else self.pool.default_generator())
-        self.last_gen_model = model
+        self.last_gen_model = agent
         fields = None
         if g.schema == "Text":
             fields = None
@@ -201,10 +217,10 @@ class Interp:
             fields = [f for f, _ in self.schemas[g.schema].fields]
         self.cost["gen_calls"] += 1
         if fields == []:
-            out = run_gen(self.oracle, self.trace, model,
+            out = run_gen(self.oracle, self.trace, agent,
                           prompt + "\n\nFIELDS: result", ["result"])
             return out
-        return run_gen(self.oracle, self.trace, model, prompt, fields)
+        return run_gen(self.oracle, self.trace, agent, prompt, fields)
 
     def eval_select(self, sel: A.SelectExpr):
         query = self.to_str(self.eval(sel.query)).lower()

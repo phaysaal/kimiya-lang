@@ -27,15 +27,72 @@ FAMILY_PATTERNS = [
     ("mixtral", "mistral"), ("gemma", "gemma"), ("phi", "phi"),
     ("deepseek", "deepseek"), ("granite", "granite"),
     ("command-r", "cohere"), ("olmo", "olmo"), ("smollm", "smollm"),
+    ("claude", "anthropic"), ("gpt", "openai"), ("o3", "openai"),
+    ("grok", "xai"), ("nova", "amazon"),
 ]
+PROVIDER_FAMILIES = {
+    "anthropic": "anthropic", "openai": "openai", "google": "google",
+    "meta-llama": "llama", "mistralai": "mistral", "qwen": "qwen",
+    "deepseek": "deepseek", "x-ai": "xai", "cohere": "cohere",
+    "amazon": "amazon", "microsoft": "phi",
+}
 
 
 def family_of(model: str) -> str:
     m = model.lower()
+    if m.startswith("override://"):   # a declared family override
+        return m.split("://", 1)[1]
+    if "/" in m:                      # openrouter-style provider/model
+        provider = m.split("/", 1)[0]
+        if provider in PROVIDER_FAMILIES:
+            return PROVIDER_FAMILIES[provider]
     for pat, fam in FAMILY_PATTERNS:
         if pat in m:
             return fam
-    return m.split(":")[0]
+    return m.split("/")[-1].split(":")[0]
+
+
+@dataclass
+class Agent:
+    """A declared model instance: who it is, where it runs, its family.
+
+    Backends: "ollama" (default; local unless url says otherwise),
+    "openai" (any OpenAI-compatible /v1 endpoint — vLLM on a vast.ai pod,
+    llama.cpp server, LM Studio), "openrouter". API keys never appear in
+    source; key_env names an environment variable.
+    """
+
+    name: str
+    model: str
+    backend: str = "ollama"
+    url: str | None = None
+    key_env: str | None = None
+    family_override: str | None = None
+
+    @property
+    def family(self) -> str:
+        return self.family_override or family_of(self.model)
+
+    @property
+    def resolved_url(self) -> str:
+        if self.url:
+            return self.url.rstrip("/")
+        if self.backend == "openrouter":
+            return "https://openrouter.ai/api/v1"
+        return BASE_URL
+
+    @property
+    def host(self) -> str:
+        u = self.resolved_url
+        return u.split("//", 1)[-1].split("/", 1)[0]
+
+    @property
+    def is_local(self) -> bool:
+        return self.host.split(":")[0] in ("127.0.0.1", "localhost")
+
+    def label(self) -> str:
+        where = "local" if self.is_local else self.host
+        return f"{self.name}={self.model}@{where}"
 
 
 def _wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -127,19 +184,53 @@ class Oracle:
             data = json.loads(resp.read())
         return [m["name"] for m in data.get("models", [])]
 
-    def complete(self, model: str, prompt: str, system: str = "",
+    def complete(self, agent: Agent, prompt: str, system: str = "",
                  temperature: float = 0.2, max_tokens: int = 1024) -> str:
-        payload = {"model": model, "prompt": prompt, "system": system,
-                   "stream": False,
+        if agent.backend == "ollama":
+            return self._ollama(agent, prompt, system, temperature,
+                                max_tokens)
+        if agent.backend in ("openai", "openrouter"):
+            return self._chat(agent, prompt, system, temperature,
+                              max_tokens)
+        raise RuntimeError(f"unknown backend '{agent.backend}'")
+
+    def _ollama(self, agent, prompt, system, temperature, max_tokens):
+        payload = {"model": agent.model, "prompt": prompt,
+                   "system": system, "stream": False,
                    "options": {"temperature": temperature,
                                "num_predict": max_tokens}}
         req = urllib.request.Request(
-            BASE_URL + "/api/generate",
+            agent.resolved_url + "/api/generate",
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             data = json.loads(resp.read())
         return data.get("response", "")
+
+    def _chat(self, agent, prompt, system, temperature, max_tokens):
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload = {"model": agent.model, "messages": messages,
+                   "temperature": temperature, "max_tokens": max_tokens}
+        headers = {"Content-Type": "application/json"}
+        if agent.key_env:
+            key = os.environ.get(agent.key_env, "")
+            if not key:
+                raise RuntimeError(
+                    f"agent {agent.name}: environment variable "
+                    f"{agent.key_env} is not set")
+            headers["Authorization"] = f"Bearer {key}"
+        req = urllib.request.Request(
+            agent.resolved_url + "/chat/completions",
+            data=json.dumps(payload).encode(), headers=headers)
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            data = json.loads(resp.read())
+        choices = data.get("choices") or []
+        if not choices:
+            return ""
+        return (choices[0].get("message") or {}).get("content", "") or ""
 
 
 class MockOracle(Oracle):
@@ -149,7 +240,7 @@ class MockOracle(Oracle):
     def models(self) -> list[str]:
         return ["mock-llama:1b", "mock-qwen:1b", "mock-gemma:1b"]
 
-    def complete(self, model: str, prompt: str, system: str = "",
+    def complete(self, agent: Agent, prompt: str, system: str = "",
                  temperature: float = 0.2, max_tokens: int = 1024) -> str:
         if "Answer with exactly YES or NO" in system:
             return "NO" if "MOCKNO" in prompt else "YES"
@@ -168,24 +259,24 @@ def get_oracle() -> Oracle:
 
 @dataclass
 class Pool:
-    bindings: dict           # pool name -> model, insertion-ordered
+    bindings: dict           # agent name -> Agent, insertion-ordered
 
     @property
-    def models(self) -> list[str]:
+    def agents(self) -> list[Agent]:
         return list(self.bindings.values())
 
-    def model(self, name: str) -> str:
+    def agent(self, name: str) -> Agent:
         return self.bindings[name]
 
-    def default_generator(self) -> str:
-        return self.models[0]
+    def default_generator(self) -> Agent:
+        return self.agents[0]
 
-    def panel_for(self, generator: str, k: int,
-                  names: list[str] | None) -> tuple[list[str], bool]:
-        gen_fam = family_of(generator)
+    def panel_for(self, generator: Agent, k: int,
+                  names: list[str] | None) -> tuple[list[Agent], bool]:
+        gen_fam = generator.family
         cand = ([self.bindings[n] for n in names] if names
-                else self.models)
-        others = [m for m in cand if family_of(m) != gen_fam]
+                else self.agents)
+        others = [a for a in cand if a.family != gen_fam]
         if others:
             return (others * ((k // len(others)) + 1))[:k], True
         if not cand:
@@ -215,7 +306,7 @@ class Judgment:
 
 
 def run_judge(pool: Pool, oracle: Oracle, trace: Trace, sheets: Datasheets,
-              task: str, claim: str, evidence: str, generator: str,
+              task: str, claim: str, evidence: str, generator: Agent,
               k: int, tau: float, purpose: str,
               panel_names: list[str] | None, paraphrases: int) -> Judgment:
     panel, certified = pool.panel_for(generator, k, panel_names)
@@ -227,40 +318,42 @@ def run_judge(pool: Pool, oracle: Oracle, trace: Trace, sheets: Datasheets,
             "Does the evidence support the claim?",
             "Is the claim warranted by the evidence above?"))
     votes, voters = 0, []
-    for i, model in enumerate(panel):
+    for i, agent in enumerate(panel):
         p = variants[i % len(variants)]
         try:
-            out = oracle.complete(model, p, system=JUDGE_SYSTEM,
+            out = oracle.complete(agent, p, system=JUDGE_SYSTEM,
                                   temperature=0.1, max_tokens=8)
             vote = out.strip().upper().startswith("YES")
             err = None
-        except OSError as e:
+        except (OSError, RuntimeError) as e:
             vote, err = False, str(e)[:80]
         votes += int(vote)
-        voters.append({"model": model, "vote": vote,
+        voters.append({"agent": agent.name, "model": agent.model,
+                       "host": agent.host, "vote": vote,
                        **({"error": err} if err else {})})
     verdict = votes >= math.ceil(tau * k)
     rec = {"kind": "judge", "task": task, "purpose": purpose,
            "claim": claim[:300], "claim_hash": h(claim),
            "evidence_hash": h(evidence), "votes": votes, "k": k,
            "tau": tau, "verdict": verdict, "certified": certified,
-           "panel": voters, "generator": generator,
+           "panel": voters, "generator": generator.label(),
            "datasheet": sheets.get(task)}
     trace.append(rec)
     return Judgment(verdict, votes, k, certified, task, rec)
 
 
-def run_gen(oracle: Oracle, trace: Trace, model: str, prompt: str,
+def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
             schema_fields: list[str] | None, budget: int = 3):
     """schema_fields None => free text; else JSON with those fields."""
+    who = agent.label()
     if schema_fields is None:
         try:
-            out = oracle.complete(model, prompt, temperature=0.3)
-            trace.append({"kind": "gen", "model": model,
+            out = oracle.complete(agent, prompt, temperature=0.3)
+            trace.append({"kind": "gen", "agent": who,
                           "prompt_hash": h(prompt), "ok": True})
             return out.strip()
-        except OSError as e:
-            trace.append({"kind": "gen", "model": model,
+        except (OSError, RuntimeError) as e:
+            trace.append({"kind": "gen", "agent": who,
                           "prompt_hash": h(prompt), "ok": False,
                           "error": str(e)[:80]})
             return None
@@ -268,10 +361,10 @@ def run_gen(oracle: Oracle, trace: Trace, model: str, prompt: str,
     full = f"{prompt}\n\nFIELDS: {want}\nReturn ONLY a JSON object."
     for attempt in range(budget):
         try:
-            out = oracle.complete(model, full, system=GEN_SYSTEM,
+            out = oracle.complete(agent, full, system=GEN_SYSTEM,
                                   temperature=0.3 + 0.2 * attempt)
-        except OSError as e:
-            trace.append({"kind": "gen", "model": model, "attempt": attempt,
+        except (OSError, RuntimeError) as e:
+            trace.append({"kind": "gen", "agent": who, "attempt": attempt,
                           "prompt_hash": h(full), "ok": False,
                           "error": str(e)[:80]})
             continue
@@ -284,9 +377,9 @@ def run_gen(oracle: Oracle, trace: Trace, model: str, prompt: str,
         except json.JSONDecodeError:
             continue
         if all(f in obj for f in schema_fields):
-            trace.append({"kind": "gen", "model": model, "attempt": attempt,
+            trace.append({"kind": "gen", "agent": who, "attempt": attempt,
                           "prompt_hash": h(full), "ok": True})
             return obj
-    trace.append({"kind": "gen", "model": model, "prompt_hash": h(full),
+    trace.append({"kind": "gen", "agent": who, "prompt_hash": h(full),
                   "ok": False, "budget_exhausted": True})
     return None

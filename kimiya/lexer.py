@@ -15,7 +15,7 @@ KEYWORDS = {
     "paraphrase_prompts", "under", "by", "if", "then", "else", "forall", "in",
     "commit", "abstain", "print", "true", "false", "null", "and", "or", "not",
     "contradicts", "irreversible", "recoverable",
-    "fn", "return", "use", "pyfn", "python",
+    "fn", "return", "use", "pyfn", "python", "agent",
 }
 WKEYWORDS = {"act", "observe", "settle", "within", "inv", "compensate"}
 

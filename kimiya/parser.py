@@ -87,7 +87,7 @@ class Parser:
         self.skip_newlines()
         while not self.at("EOF"):
             if self.at_kw("pool", "context", "schema", "effect", "fn",
-                          "use", "pyfn"):
+                          "use", "pyfn", "agent"):
                 prog.decls.append(self.decl())
             else:
                 prog.body.append(self.stmt())
@@ -104,6 +104,23 @@ class Parser:
             model = self.expect("STRING").value
             self.expect("NEWLINE")
             return A.PoolDecl(name, model, t.line)
+        if self.at_kw("agent"):
+            self.next()
+            name = self.expect("NAME").value
+            self.expect("OP", ":")
+            self.expect("NEWLINE")
+            self.expect("INDENT")
+            afields = {}
+            while not self.at("DEDENT"):
+                self.skip_newlines()
+                if self.at("DEDENT"):
+                    break
+                key = self.expect("NAME").value
+                self.expect("OP", "=")
+                afields[key] = self.expect("STRING").value
+                self.expect("NEWLINE")
+            self.expect("DEDENT")
+            return A.AgentDecl(name, afields, t.line)
         if self.at_kw("context"):
             self.next()
             name = self.expect("NAME").value

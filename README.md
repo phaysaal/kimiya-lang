@@ -65,6 +65,55 @@ instruments start **prior-grade** and tighten as you label judgments with
 `calibrate`. Judgments without a cross-provenance panel run but are
 flagged UNCERTIFIED (self-judgment never certifies).
 
+## Agents: local, vast.ai pods, and OpenRouter
+
+A **pool member is an agent** — a declared model instance with a backend,
+a model id, and (for remote agents) an endpoint and a key. `pool A =
+"model"` is sugar for a local Ollama agent; the full form is:
+
+```
+agent A:                              -- local (the default)
+    backend = "ollama"
+    model   = "llama3.1:8b"
+
+agent B:                              -- a vast.ai pod running vLLM
+    backend = "openai"                -- any OpenAI-compatible /v1 server
+    model   = "Qwen/Qwen3-32B"
+    url     = "http://<pod-ip>:8000/v1"
+    key_env = "VAST_API_KEY"          -- optional bearer token
+
+agent C:                              -- OpenRouter
+    backend = "openrouter"
+    model   = "mistralai/mistral-large"
+    key_env = "OPENROUTER_API_KEY"
+    family  = "mistral"               -- optional J⋪C family override
+```
+
+Backends: `ollama` (local unless `url` says otherwise), `openai` (any
+OpenAI-compatible endpoint — vLLM, llama.cpp server, LM Studio, a rented
+pod), `openrouter`. Provider families are inferred for cross-provenance
+panels: `anthropic/…`, `meta-llama/…`, `mistralai/…`, `Qwen/…` all get
+the right family so `judge … panel [B, C]` is checked for J⋪C across
+*providers*, not just local weight families.
+
+**Keys never appear in source.** `key_env` names an environment variable;
+the interpreter reads it at call time. Nothing secret is ever parsed,
+logged, or written to a certificate.
+
+**Egress is a declared, audited property.** A program that declares only
+local agents keeps the nothing-leaves-the-machine guarantee. A program
+with remote agents says so in the source, is announced before it runs —
+
+```
+⚠ network egress: this program sends prompts to remote agents —
+    B → Qwen/Qwen3-32B @ <pod-ip>:8000 (openai)
+    C → mistralai/mistral-large @ openrouter.ai (openrouter)
+```
+
+— and the certificate carries an `egress` list of every non-local host
+its prompts reached. See `examples/hybrid_pool.kim`: local generation, a
+remote cross-provenance judge panel.
+
 ## The world extension
 
 ```

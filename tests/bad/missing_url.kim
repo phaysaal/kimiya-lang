@@ -1,0 +1,6 @@
+-- must FAIL: openai backend without a url
+agent B:
+    backend = "openai"
+    model   = "Qwen/Qwen3-32B"
+x := "ok"
+commit(x)

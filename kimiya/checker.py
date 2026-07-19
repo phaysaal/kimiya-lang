@@ -63,6 +63,25 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
     r = CheckReport()
     pools = {d.name: d.model for d in prog.decls
              if isinstance(d, A.PoolDecl)}
+    for d in prog.decls:
+        if isinstance(d, A.AgentDecl):
+            fk = d.fields
+            backend = fk.get("backend", "ollama")
+            if backend not in ("ollama", "openai", "openrouter"):
+                r.err(d.line, f"agent '{d.name}': unknown backend "
+                              f"'{backend}'")
+            if "model" not in fk:
+                r.err(d.line, f"agent '{d.name}': missing model")
+            if backend == "openrouter" and "key_env" not in fk:
+                r.warn(d.line, f"agent '{d.name}': openrouter without "
+                               "key_env — set key_env to a variable name")
+            if backend == "openai" and "url" not in fk:
+                r.err(d.line, f"agent '{d.name}': openai backend needs a "
+                              "url (the pod's /v1 endpoint)")
+            # family_of over the model, respecting a family override
+            fam = fk.get("family") or family_of(fk.get("model", ""))
+            pools[d.name] = "override://" + fam if fk.get("family") \
+                else fk.get("model", "")
     contexts = {d.name for d in prog.decls if isinstance(d, A.ContextDecl)}
     schemas = ({d.name for d in prog.decls if isinstance(d, A.SchemaDecl)}
                | BUILTIN_SCHEMAS)
