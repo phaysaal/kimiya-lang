@@ -122,7 +122,52 @@ GUARD    := check E
 
 Comments `--`; indentation is significant (spaces only). Builtins: `len
 contains starts_with lower trim lines join str num hash now range first
-last keys file_exists`.
+last keys file_exists map filter sort_by sum`.
+
+## Functions, modules, and Python interop
+
+```
+fn bulletize(items):                 -- functions are first-class values
+    out := ""
+    forall i in items:
+        out := out + "- " + str(i) + "\n"
+    return out
+
+use "textlib.kim"                    -- module: pure declarations only
+use python "pystats.py"              -- python file: kernel functions
+pyfn mean = "statistics.mean"        -- one dotted python callable
+
+xs := map(num, some_lines)           -- functions/builtins pass to map/filter
+ys := sort_by(last, pairs)
+```
+
+Design rules, and why:
+
+- **Functions see only their parameters** (and other functions) — no
+  global capture. Explicit data flow keeps the audit story simple.
+- **Modules are pure**: a used `.kim` file may contain only declarations
+  and `fn`s; a top-level statement in a module is a load error.
+  Declarations merge flat; duplicate names collide loudly.
+- **A Python function is a kernel instrument.** Deterministic code is
+  exactly what `check`-grade computation is, so Python is the kernel
+  extension mechanism — for data-heavy work (parsing, statistics,
+  hashing), not for smuggling semantics. The price is honesty about the
+  audit surface: every loaded extension is announced at check/run time
+  and cited in the certificate by **file SHA** (or dotted path), exactly
+  like a datasheet:
+
+  ```
+  ⚠ python extension loaded: pystats.py (sha afb752e7…) — kernel-grade,
+    audit this file
+  ...
+  "python_extensions": [{"kind": "file", "path": "pystats.py",
+                         "sha": "afb752e7...", "functions": [...]}]
+  ```
+
+  A Python extension escapes the language's guarantees (it can do
+  anything Python can); the language's job is to make that visible, not
+  to pretend otherwise. See `examples/data_pipeline.kim`: Python does
+  the arithmetic at certainty 1, models do only judged interpretation.
 
 ## Editor support
 

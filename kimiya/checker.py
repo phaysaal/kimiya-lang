@@ -1,19 +1,17 @@
 """Static checker: the paper's disciplines as rejection rules.
 
-  K1  judged relations must cite a declared purpose (silent semantic
-      identification is ill-formed by construction)
-  K2  panel names must be declared pools; a judge guarding a retry must be
-      cross-provenance from the body's generator (J-not-lhd-C)
+  K1  judged relations must cite a declared purpose
+  K2  a retry's judge panel must be cross-provenance from the body's
+      generator (J-not-lhd-C)
   K3  select recall must lie in (0, 1]
   K4  an irreversible act may not occur inside a retry body
-  K5  an irreversible act must be gated: immediately preceded by a check
-      statement, or first in a branch of an if whose guard is check/judge
-      (the verified gate)
-  K6  a retry whose body touches the world (any act) must declare inv
-      and/or compensate (snapshot retry over effects is unsound)
+  K5  an irreversible act must be gated (verified gate)
+  K6  world-touching retry needs inv/compensate (snapshot retry over an
+      external world is unsound)
   K7  gen schemas must be declared (or builtin Text/Json)
-  K8  names must be defined before use
-  K9  retry budgets and settle deadlines must be positive
+  K8  names defined before use; functions called at declared arity;
+      function bodies see only their parameters and other functions
+  K9  retry budgets and settle deadlines positive; return only inside fn
 """
 
 from __future__ import annotations
@@ -25,7 +23,7 @@ BUILTIN_SCHEMAS = {"Text", "Json"}
 BUILTIN_FUNCS = {
     "len", "contains", "starts_with", "lower", "trim", "lines", "join",
     "str", "num", "hash", "now", "range", "first", "last", "keys",
-    "file_exists",
+    "file_exists", "map", "filter", "sort_by", "sum",
 }
 DEFAULT_IRREVERSIBLE = {("file", "overwrite"), ("file", "delete")}
 KNOWN_ACTIONS = {("file", "create"), ("file", "append"),
@@ -61,13 +59,16 @@ class CheckReport:
         return not self.errors
 
 
-def check(prog: A.Program) -> CheckReport:
+def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
     r = CheckReport()
     pools = {d.name: d.model for d in prog.decls
              if isinstance(d, A.PoolDecl)}
     contexts = {d.name for d in prog.decls if isinstance(d, A.ContextDecl)}
     schemas = ({d.name for d in prog.decls if isinstance(d, A.SchemaDecl)}
                | BUILTIN_SCHEMAS)
+    fns = {d.name: d for d in prog.decls if isinstance(d, A.FnDecl)}
+    pyfns = set(py_fn_names) | {d.name for d in prog.decls
+                                if isinstance(d, A.PyFnDecl)}
     irreversible = set(DEFAULT_IRREVERSIBLE)
     for d in prog.decls:
         if isinstance(d, A.EffectDecl):
@@ -77,15 +78,25 @@ def check(prog: A.Program) -> CheckReport:
                 irreversible.discard((d.surface, d.action))
 
     defined: set[str] = set()
+    in_fn = [False]
+
+    def known_callable(name: str) -> bool:
+        return (name in BUILTIN_FUNCS or name in fns or name in pyfns
+                or name in defined)
 
     # ---------- expressions ----------
     def chk_expr(e):
         if isinstance(e, A.Var):
-            if e.name not in defined:
+            if not (e.name in defined or e.name in fns or e.name in pyfns
+                    or e.name in BUILTIN_FUNCS):
                 r.err(e.line, f"undefined name '{e.name}'")
         elif isinstance(e, A.Call):
-            if e.func not in BUILTIN_FUNCS:
+            if not known_callable(e.func):
                 r.err(e.line, f"unknown function '{e.func}'")
+            if e.func in fns and len(e.args) != len(fns[e.func].params):
+                r.err(e.line,
+                      f"'{e.func}' takes {len(fns[e.func].params)} "
+                      f"argument(s), got {len(e.args)}")
             for a in e.args:
                 chk_expr(a)
         elif isinstance(e, A.BinOp):
@@ -124,8 +135,8 @@ def check(prog: A.Program) -> CheckReport:
         if g.panel:
             for p in g.panel:
                 if p not in pools:
-                    r.err(g.line, f"panel member '{p}' is not a declared "
-                                  "pool")
+                    r.err(g.line,
+                          f"panel member '{p}' is not a declared pool")
         if generator_model:
             gf = family_of(generator_model)
             cand = ([pools[p] for p in (g.panel or []) if p in pools]
@@ -196,6 +207,11 @@ def check(prog: A.Program) -> CheckReport:
             chk_expr(s.expr)
         elif isinstance(s, A.AbstainStmt):
             pass
+        elif isinstance(s, A.ReturnStmt):
+            if not in_fn[0]:
+                r.err(s.line, "return outside a function")
+            if s.expr is not None:
+                chk_expr(s.expr)
         elif isinstance(s, A.IfStmt):
             chk_guard(s.guard, None)
             for branch in (s.then, s.els or []):
@@ -247,6 +263,17 @@ def check(prog: A.Program) -> CheckReport:
             chk_expr(s.inv)
         if s.compensate:
             chk_stmts(s.compensate, in_retry=False)
+
+    # ---------- function bodies: own scope, no globals ----------
+    for f in fns.values():
+        saved = set(defined)
+        defined.clear()
+        defined.update(f.params)
+        in_fn[0] = True
+        chk_stmts(f.body, in_retry=False)
+        in_fn[0] = False
+        defined.clear()
+        defined.update(saved)
 
     if not pools:
         has_model_step = any(

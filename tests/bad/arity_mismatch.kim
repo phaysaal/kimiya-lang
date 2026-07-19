@@ -1,0 +1,5 @@
+-- must FAIL: wrong arity in a function call
+fn double(a):
+    return a + a
+x := double(1, 2)
+commit(x)

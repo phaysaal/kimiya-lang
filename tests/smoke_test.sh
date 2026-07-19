@@ -17,6 +17,8 @@ declare -A want=(
   [unguarded_delete]="unguarded"
   [retry_effects]="snapshot retry over an external world"
   [irreversible_in_retry]="inside a retry body"
+  [impure_module]="must be pure declarations"
+  [arity_mismatch]="argument(s)"
 )
 for name in "${!want[@]}"; do
   out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)
@@ -35,13 +37,22 @@ rm -f examples/agentic_digest.html
 
 echo "== mock runs =="
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-cp examples/grounded_summary.kim examples/agentic_digest.kim "$TMP/"
+cp examples/grounded_summary.kim examples/agentic_digest.kim \
+   examples/data_pipeline.kim examples/textlib.kim examples/pystats.py "$TMP/"
 printf 'The project deadline is Friday.\nBudget unchanged.\nDeadline moved from Monday to Friday by the sponsor.\n' > "$TMP/notes.txt"
 printf 'Meeting moved to 3pm.\nInvoice 42 paid.\nServer restarted twice.\n' > "$TMP/inbox.txt"
+printf '12\n15\n11\n90\n13\n14\n12\n' > "$TMP/latencies.txt"
 cd "$TMP"
 KIMIYA_MOCK=1 python3 -m kimiya run grounded_summary.kim | grep -q "COMMITTED" \
   || { echo "FAIL: grounded_summary did not commit"; exit 1; }
 KIMIYA_MOCK=1 python3 -m kimiya run agentic_digest.kim | grep -q "COMMITTED" \
   || { echo "FAIL: agentic_digest did not commit"; exit 1; }
 test -f digest.txt || { echo "FAIL: act did not write digest.txt"; exit 1; }
+out=$(KIMIYA_MOCK=1 python3 -m kimiya run data_pipeline.kim)
+grep -q "COMMITTED" <<<"$out" || { echo "FAIL: data_pipeline"; exit 1; }
+grep -q "python extension loaded" <<<"$out" \
+  || { echo "FAIL: python extension not announced"; exit 1; }
+grep -q "p95=90" <<<"$out" || { echo "FAIL: pystats math wrong"; echo "$out"; exit 1; }
+test -f reading.txt || { echo "FAIL: reading.txt not written"; exit 1; }
+grep -q "^- n=" reading.txt || { echo "FAIL: bulletize (module fn) output"; exit 1; }
 echo "SMOKE TEST PASS"

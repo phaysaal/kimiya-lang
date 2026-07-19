@@ -86,7 +86,8 @@ class Parser:
         prog = A.Program()
         self.skip_newlines()
         while not self.at("EOF"):
-            if self.at_kw("pool", "context", "schema", "effect"):
+            if self.at_kw("pool", "context", "schema", "effect", "fn",
+                          "use", "pyfn"):
                 prog.decls.append(self.decl())
             else:
                 prog.body.append(self.stmt())
@@ -159,6 +160,35 @@ class Parser:
                                  "irreversible or recoverable")
             self.expect("NEWLINE")
             return A.EffectDecl(surface, action, klass.value, t.line)
+        if self.at_kw("fn"):
+            self.next()
+            name = self.expect("NAME").value
+            self.expect("OP", "(")
+            params = []
+            while not self.at("OP", ")"):
+                params.append(self.expect("NAME").value)
+                if self.at("OP", ","):
+                    self.next()
+            self.expect("OP", ")")
+            self.expect("OP", ":")
+            body = self.block()
+            return A.FnDecl(name, params, body, t.line)
+        if self.at_kw("use"):
+            self.next()
+            is_python = False
+            if self.at_kw("python"):
+                self.next()
+                is_python = True
+            path = self.expect("STRING").value
+            self.expect("NEWLINE")
+            return A.UseDecl(path, is_python, t.line)
+        if self.at_kw("pyfn"):
+            self.next()
+            name = self.expect("NAME").value
+            self.expect("OP", "=")
+            target = self.expect("STRING").value
+            self.expect("NEWLINE")
+            return A.PyFnDecl(name, target, t.line)
         raise ParseError(f"line {t.line}: expected declaration")
 
     def name_list(self) -> list[str]:
@@ -206,6 +236,13 @@ class Parser:
             self.next()
             self.end_stmt()
             return A.AbstainStmt(t.line)
+        if self.at_kw("return"):
+            self.next()
+            expr = None
+            if not (self.at("NEWLINE") or self.at("DEDENT")):
+                expr = self.expr()
+            self.end_stmt()
+            return A.ReturnStmt(expr, t.line)
         if self.at_kw("if"):
             self.next()
             g = self.guard()

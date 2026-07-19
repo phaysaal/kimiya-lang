@@ -11,7 +11,7 @@
     { "name": "keyword.control.world.kimiya",
       "match": "\\b(act|observe|settle|within|inv|compensate)\\b" },
     { "name": "keyword.control.kimiya",
-      "match": "\\b(pool|context|schema|effect|domain|preserve|allow_loss|gen|select|judge|check|retry|until|budget|panel|paraphrase_prompts|under|by|if|then|else|forall|in|commit|abstain|print|contradicts|irreversible|recoverable)\\b" },
+      "match": "\\b(pool|context|schema|effect|domain|preserve|allow_loss|gen|select|judge|check|retry|until|budget|panel|paraphrase_prompts|under|by|if|then|else|forall|in|commit|abstain|print|contradicts|irreversible|recoverable|fn|return|use|pyfn|python)\\b" },
     { "name": "constant.language.kimiya", "match": "\\b(true|false|null)\\b" },
     { "name": "keyword.operator.kimiya", "match": "(:=|\\|=|~|==|!=|<=|>=)" }
   ]

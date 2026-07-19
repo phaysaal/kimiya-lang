@@ -1,0 +1,3 @@
+fn helper(a):
+    return a
+x := "I am a top-level statement in a module"

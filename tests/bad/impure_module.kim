@@ -1,0 +1,3 @@
+-- must FAIL at load: the used module contains a top-level statement
+use "impure_module_lib.kim"
+x := "ok"

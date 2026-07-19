@@ -36,13 +36,35 @@ class Bolt(Exception):
         self.reason = reason
 
 
+class ReturnSignal(Exception):
+    def __init__(self, value):
+        super().__init__("return")
+        self.value = value
+
+
+class FuncValue:
+    """A Kimiya function as a first-class value."""
+
+    def __init__(self, decl, interp):
+        self.decl = decl
+        self.interp = interp
+
+    def __call__(self, *args):
+        return self.interp.call_fn(self.decl, list(args))
+
+    def __repr__(self):
+        return f"<fn {self.decl.name}>"
+
+
 class KimiyaRuntimeError(RuntimeError):
     pass
 
 
 class Interp:
     def __init__(self, prog: A.Program, program_path: Path,
-                 models_override: list[str] | None = None):
+                 models_override: list[str] | None = None,
+                 py_funcs: dict | None = None,
+                 py_exts: list | None = None):
         self.prog = prog
         self.workspace = program_path.parent / ".kimiya"
         self.workspace.mkdir(exist_ok=True)
@@ -54,6 +76,10 @@ class Interp:
                          if isinstance(d, A.ContextDecl)}
         self.schemas = {d.name: d for d in prog.decls
                         if isinstance(d, A.SchemaDecl)}
+        self.fns = {d.name: d for d in prog.decls
+                    if isinstance(d, A.FnDecl)}
+        self.py_funcs = py_funcs or {}
+        self.py_exts = py_exts or []
         bindings = {d.name: d.model for d in prog.decls
                     if isinstance(d, A.PoolDecl)}
         if models_override:
@@ -104,6 +130,7 @@ class Interp:
             "theta_factors": [(n, round(f, 4)) for n, f in self.theta],
             "uncertified_judgments": self.uncertified,
             "instruments": {t: self.sheets.get(t) for t in tasks},
+            "python_extensions": self.py_exts,
             "cost": dict(self.cost, seconds=round(secs, 1)),
             "trace_records": self.trace.count(),
         }
@@ -129,6 +156,9 @@ class Interp:
             self.trace.append({"kind": "commit", "line": s.line})
         elif isinstance(s, A.AbstainStmt):
             raise Bolt(f"abstain at line {s.line}")
+        elif isinstance(s, A.ReturnStmt):
+            raise ReturnSignal(self.eval(s.expr)
+                               if s.expr is not None else None)
         elif isinstance(s, A.IfStmt):
             if self.eval_guard(s.guard):
                 self.exec_stmts(s.then)
@@ -316,14 +346,45 @@ class Interp:
         raise Bolt(f"settle deadline ({s.within}s) elapsed at line {s.line}")
 
     # ------------------------------------------------ expressions
+    def call_fn(self, decl, args):
+        """Call a Kimiya fn: fresh scope of params only (no globals)."""
+        if len(args) != len(decl.params):
+            raise KimiyaRuntimeError(
+                f"'{decl.name}' takes {len(decl.params)} argument(s), "
+                f"got {len(args)}")
+        saved = self.env
+        self.env = dict(zip(decl.params, args))
+        try:
+            self.exec_stmts(decl.body)
+            return None
+        except ReturnSignal as ret:
+            return ret.value
+        finally:
+            self.env = saved
+
+    def resolve_callable(self, name: str):
+        v = self.env.get(name)
+        if isinstance(v, FuncValue) or callable(v):
+            return v
+        if name in self.fns:
+            return FuncValue(self.fns[name], self)
+        if name in self.py_funcs:
+            return self.py_funcs[name]
+        return None
+
     def eval(self, e):
         if isinstance(e, A.Lit):
             return e.value
         if isinstance(e, A.Var):
-            if e.name not in self.env:
-                raise KimiyaRuntimeError(
-                    f"line {e.line}: undefined variable '{e.name}'")
-            return self.env[e.name]
+            if e.name in self.env:
+                return self.env[e.name]
+            f = self.resolve_callable(e.name)
+            if f is not None:
+                return f
+            if e.name in _BUILTIN_VALUES:
+                return _BUILTIN_VALUES[e.name]
+            raise KimiyaRuntimeError(
+                f"line {e.line}: undefined variable '{e.name}'")
         if isinstance(e, A.ListExpr):
             return [self.eval(x) for x in e.items]
         if isinstance(e, A.RecordExpr):
@@ -390,6 +451,23 @@ class Interp:
     def call(self, e: A.Call):
         args = [self.eval(a) for a in e.args]
         f = e.func
+        target = self.resolve_callable(f)
+        if target is not None:
+            try:
+                return _pyify(target(*args))
+            except (Bolt, ReturnSignal):
+                raise
+            except Exception as ex:
+                raise KimiyaRuntimeError(
+                    f"line {e.line}: {f}() failed: {ex}") from ex
+        if f == "map":
+            return [_pyify(args[0](x)) for x in args[1]]
+        if f == "filter":
+            return [x for x in args[1] if args[0](x)]
+        if f == "sort_by":
+            return sorted(args[1], key=args[0])
+        if f == "sum":
+            return sum(args[0])
         if f == "len":
             return len(args[0])
         if f == "contains":
@@ -434,6 +512,9 @@ class Interp:
             return v
         raise KimiyaRuntimeError(f"line {line}: expected a list")
 
+    # first-class builtins usable as map/filter arguments
+    # (populated at module level below)
+
     @staticmethod
     def to_str(v) -> str:
         if v is None:
@@ -443,3 +524,23 @@ class Interp:
         if isinstance(v, (dict, list)):
             return json.dumps(v, ensure_ascii=False, default=str)
         return str(v)
+
+
+def _pyify(v):
+    """Marshal a Python return value into a Kimiya value."""
+    if isinstance(v, (str, bool, int, float, list, dict)) or v is None:
+        return v
+    if isinstance(v, (tuple, set, frozenset)):
+        return [_pyify(x) for x in v]
+    return str(v)
+
+
+_BUILTIN_VALUES = {
+    "num": lambda x: float(x),
+    "str": Interp.to_str,
+    "lower": lambda s: str(s).lower(),
+    "trim": lambda s: str(s).strip(),
+    "len": len,
+    "first": lambda xs: xs[0] if xs else None,
+    "last": lambda xs: xs[-1] if xs else None,
+}

@@ -1,0 +1,31 @@
+-- Data-heavy demo: Python does the arithmetic (kernel-grade, cited by
+-- SHA in the certificate); models do only interpretation, judged.
+
+pool A = "llama3.1:8b"
+pool B = "gemma4:e4b"
+pool C = "mistral:7b"
+
+use "textlib.kim"
+use python "pystats.py"
+
+context k_read:
+    domain     = "whether an interpretation is supported by computed statistics"
+    preserve   = [direction_of_effect, magnitude_class]
+    allow_loss = [phrasing]
+
+schema Reading:
+    text: text
+
+raw := observe file("latencies.txt")
+xs := parse_nums(raw.text)
+check len(xs) > 0
+
+facts := "n=" + str(len(xs)) + "  mean=" + str(mean(xs)) + "  stdev=" + str(stdev(xs)) + "  p95=" + str(p95(xs))
+print facts
+
+r := retry budget 3 until judge<5,4/5> (facts |= r.text) under k_read panel [B, C]:
+    r := gen<Reading>("In one sentence, state only what these latency statistics show: " + facts) by A
+
+check len(r.text) > 0
+act file.overwrite("reading.txt", bulletize([facts, r.text]))
+commit(facts)

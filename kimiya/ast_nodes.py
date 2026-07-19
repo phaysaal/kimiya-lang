@@ -220,6 +220,34 @@ class SettleStmt:
 
 
 @dataclass
+class FnDecl:
+    name: str
+    params: list
+    body: list
+    line: int = 0
+
+
+@dataclass
+class ReturnStmt:
+    expr: object | None
+    line: int = 0
+
+
+@dataclass
+class UseDecl:
+    path: str
+    python: bool
+    line: int = 0
+
+
+@dataclass
+class PyFnDecl:
+    name: str
+    target: str          # dotted path, e.g. "statistics.mean"
+    line: int = 0
+
+
+@dataclass
 class Program:
     decls: list = field(default_factory=list)
     body: list = field(default_factory=list)

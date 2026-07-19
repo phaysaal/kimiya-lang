@@ -18,24 +18,38 @@ from pathlib import Path
 
 from . import runtime
 from .runtime import get_oracle, family_of, Datasheets, Trace
-from .parser import parse, ParseError
+from .parser import ParseError
 from .lexer import LexError
+from .loader import load_program, LoadError
 from .checker import check as static_check
 from .interp import Interp
 from . import highlight
 
 
 def _load(path: str):
-    src = Path(path).read_text()
     try:
-        return src, parse(src)
+        return load_program(Path(path))
     except (ParseError, LexError) as e:
         sys.exit(f"syntax error: {e}")
+    except LoadError as e:
+        sys.exit(f"load error: {e}")
+
+
+def _announce_py(py_exts):
+    for ext in py_exts:
+        if ext["kind"] == "file":
+            print(f"⚠ python extension loaded: {ext['path']} "
+                  f"(sha {ext['sha']}; functions: "
+                  f"{', '.join(ext['functions'])}) — kernel-grade, audit "
+                  "this file")
+        else:
+            print(f"⚠ python binding: {ext['name']} = {ext['target']}")
 
 
 def cmd_check(args):
-    _, prog = _load(args.file)
-    rep = static_check(prog)
+    prog, py_funcs, py_exts = _load(args.file)
+    _announce_py(py_exts)
+    rep = static_check(prog, frozenset(py_funcs))
     for w in rep.warnings:
         print(f"⚠ {w}")
     for e in rep.errors:
@@ -49,8 +63,9 @@ def cmd_check(args):
 
 
 def cmd_run(args):
-    _, prog = _load(args.file)
-    rep = static_check(prog)
+    prog, py_funcs, py_exts = _load(args.file)
+    _announce_py(py_exts)
+    rep = static_check(prog, frozenset(py_funcs))
     for w in rep.warnings:
         print(f"⚠ {w}")
     if not rep.ok:
@@ -58,7 +73,8 @@ def cmd_run(args):
             print(f"✗ {e}")
         sys.exit("refusing to run an ill-formed program")
     models = args.models.split(",") if args.models else None
-    interp = Interp(prog, Path(args.file), models)
+    interp = Interp(prog, Path(args.file), models,
+                    py_funcs=py_funcs, py_exts=py_exts)
     cert = interp.run()
     print()
     print("── certificate ──────────────────────────────")

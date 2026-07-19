@@ -1,0 +1,15 @@
+-- textlib: a pure Kimiya module (declarations and functions only).
+
+fn bulletize(items):
+    out := ""
+    forall i in items:
+        out := out + "- " + str(i) + "\n"
+    return out
+
+fn head_lines(text, n):
+    ls := lines(text)
+    out := []
+    forall i in range(n):
+        if check i < len(ls):
+            out := out + [ls[i]]
+    return out
