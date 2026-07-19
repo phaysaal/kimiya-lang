@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Interpreter smoke test: checker accepts the good, rejects the bad,
+# and both examples run end-to-end under the mock oracle (no network).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export PYTHONPATH="$PWD"
+
+echo "== checker: examples must pass =="
+for f in examples/*.kim; do
+  python3 -m kimiya check "$f" || { echo "FAIL: $f rejected"; exit 1; }
+done
+
+echo "== checker: bad programs must be rejected with the right rule =="
+declare -A want=(
+  [silent_equality]="undeclared purpose"
+  [self_judgment]="J ⋪ C"
+  [unguarded_delete]="unguarded"
+  [retry_effects]="snapshot retry over an external world"
+  [irreversible_in_retry]="inside a retry body"
+)
+for name in "${!want[@]}"; do
+  out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)
+  if python3 -m kimiya check "tests/bad/$name.kim" >/dev/null 2>&1; then
+    echo "FAIL: tests/bad/$name.kim was accepted"; exit 1
+  fi
+  if ! grep -qF "${want[$name]}" <<<"$out"; then
+    echo "FAIL: $name did not report '${want[$name]}'"; echo "$out"; exit 1
+  fi
+done
+
+echo "== highlighter =="
+python3 -m kimiya hl examples/agentic_digest.kim >/dev/null
+python3 -m kimiya hl examples/agentic_digest.kim --html >/dev/null
+rm -f examples/agentic_digest.html
+
+echo "== mock runs =="
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+cp examples/grounded_summary.kim examples/agentic_digest.kim "$TMP/"
+printf 'The project deadline is Friday.\nBudget unchanged.\nDeadline moved from Monday to Friday by the sponsor.\n' > "$TMP/notes.txt"
+printf 'Meeting moved to 3pm.\nInvoice 42 paid.\nServer restarted twice.\n' > "$TMP/inbox.txt"
+cd "$TMP"
+KIMIYA_MOCK=1 python3 -m kimiya run grounded_summary.kim | grep -q "COMMITTED" \
+  || { echo "FAIL: grounded_summary did not commit"; exit 1; }
+KIMIYA_MOCK=1 python3 -m kimiya run agentic_digest.kim | grep -q "COMMITTED" \
+  || { echo "FAIL: agentic_digest did not commit"; exit 1; }
+test -f digest.txt || { echo "FAIL: act did not write digest.txt"; exit 1; }
+echo "SMOKE TEST PASS"

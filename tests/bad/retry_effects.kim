@@ -1,0 +1,3 @@
+-- must FAIL: world effects inside retry without inv/compensate
+retry budget 2 until check file_exists("log.txt"):
+    act file.append("log.txt", "line")

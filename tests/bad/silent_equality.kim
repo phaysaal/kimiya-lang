@@ -1,0 +1,4 @@
+-- must FAIL: judged relation citing an undeclared purpose
+x := "a value"
+if judge<3,2/3> (x ~ x) under k_missing:
+    commit(x)

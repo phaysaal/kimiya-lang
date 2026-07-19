@@ -1,0 +1,24 @@
+-- The paper's §5.2 program: retrieve evidence, generate a summary,
+-- verify it by a cross-provenance panel, commit with a certificate.
+
+pool A = "llama3.1:8b"      -- generator
+pool B = "gemma4:e4b"       -- judge family 1
+pool C = "mistral:7b"       -- judge family 2
+
+context k_ev:
+    domain     = "grounded entailment of a summary against source notes"
+    preserve   = [evidential_support, scope]
+    allow_loss = [style, ordering]
+
+schema Summary:
+    text: text
+
+notes := observe file("notes.txt")
+claim := "what the notes say about the project deadline"
+
+e := select<0.95>(claim, lines(notes.text)) under k_ev
+
+s := retry budget 3 until judge<5,4/5> (join(e, "\n") |= s.text) under k_ev panel [B, C]:
+    s := gen<Summary>("Summarize, in two sentences, ONLY what these notes state about " + claim + ".\n\nNOTES:\n" + join(e, "\n")) by A
+
+commit(s)

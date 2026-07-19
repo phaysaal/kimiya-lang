@@ -1,0 +1,10 @@
+-- must FAIL: panel shares the generator's family (J not-lhd C)
+pool A  = "llama3.1:8b"
+pool A2 = "llama3:8b"
+context k_x:
+    domain     = "d"
+    preserve   = [a]
+    allow_loss = [b]
+s := retry budget 2 until judge<3,2/3> (s |= s) under k_x panel [A2]:
+    s := gen<Text>("hello") by A
+commit(s)

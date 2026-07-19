@@ -1,0 +1,22 @@
+{
+  "name": "kimiya-lang",
+  "displayName": "Kimiya",
+  "description": "Syntax highlighting for the Kimiya language (core + world extension)",
+  "version": "0.1.0",
+  "publisher": "kimiya",
+  "engines": { "vscode": "^1.60.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [{
+      "id": "kimiya",
+      "aliases": ["Kimiya", "kimiya"],
+      "extensions": [".kim"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "kimiya",
+      "scopeName": "source.kimiya",
+      "path": "./syntaxes/kimiya.tmLanguage.json"
+    }]
+  }
+}

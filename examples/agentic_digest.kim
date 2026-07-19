@@ -1,0 +1,29 @@
+-- World-extension demo: observe a file, generate a judged digest, then
+-- act on the world behind a verified gate, settle, and re-observe.
+
+pool A = "llama3.1:8b"      -- generator
+pool B = "gemma4:e4b"       -- judge family 1
+pool C = "mistral:7b"       -- judge family 2
+
+context k_dig:
+    domain     = "whether a digest faithfully reflects the observed notes"
+    preserve   = [key_facts, coverage_of_topics]
+    allow_loss = [style, ordering, emphasis]
+
+schema Digest:
+    text: text
+
+src := observe file("inbox.txt")
+
+d := retry budget 3 until judge<5,4/5> (src.text |= d.text) under k_dig panel [B, C]:
+    d := gen<Digest>("Write a three-bullet factual digest of the following notes. Only state what the notes state.\n\n" + src.text) by A
+
+-- the overwrite is an irreversible effect: it fires only behind a gate
+check len(d.text) > 0
+act file.overwrite("digest.txt", d.text)
+
+settle until check file_exists("digest.txt") within 5
+
+out := observe file("digest.txt")
+check out.text == d.text
+commit(out.sha)

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kimiya",
+  "scopeName": "source.kimiya",
+  "patterns": [
+    { "name": "comment.line.double-dash.kimiya", "match": "--.*$" },
+    { "name": "string.quoted.double.kimiya",
+      "begin": "\"", "end": "\"",
+      "patterns": [ { "name": "constant.character.escape.kimiya", "match": "\\\\." } ] },
+    { "name": "constant.numeric.kimiya", "match": "\\b\\d+(\\.\\d+)?\\b" },
+    { "name": "keyword.control.world.kimiya",
+      "match": "\\b(act|observe|settle|within|inv|compensate)\\b" },
+    { "name": "keyword.control.kimiya",
+      "match": "\\b(pool|context|schema|effect|domain|preserve|allow_loss|gen|select|judge|check|retry|until|budget|panel|paraphrase_prompts|under|by|if|then|else|forall|in|commit|abstain|print|contradicts|irreversible|recoverable)\\b" },
+    { "name": "constant.language.kimiya", "match": "\\b(true|false|null)\\b" },
+    { "name": "keyword.operator.kimiya", "match": "(:=|\\|=|~|==|!=|<=|>=)" }
+  ]
+}

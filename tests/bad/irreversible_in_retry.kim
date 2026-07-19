@@ -1,0 +1,5 @@
+-- must FAIL: irreversible act inside a retry body (even gated, even framed)
+retry budget 2 until check true:
+    check true
+    act file.delete("x.txt")
+inv file_exists("y.txt")

@@ -1,0 +1,3 @@
+-- must FAIL: irreversible act without a verified gate
+x := "hello"
+act file.delete("x.txt")
