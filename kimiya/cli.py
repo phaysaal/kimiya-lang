@@ -114,6 +114,26 @@ def cmd_run(args):
     return 0 if cert["status"] == "COMMITTED" else 2
 
 
+def cmd_compile(args):
+    prog, py_funcs, py_exts = _load(args.file)
+    _announce_py(py_exts)
+    rep = static_check(prog, frozenset(py_funcs))
+    for w in rep.warnings:
+        print(f"⚠ {w}")
+    if not rep.ok:
+        for e in rep.errors:
+            print(f"✗ {e}")
+        sys.exit("refusing to compile an ill-formed program")
+    from .compiler import compile_program
+    code = compile_program(prog, py_exts, args.file)
+    out = Path(args.out) if args.out else Path(args.file).with_suffix(".py")
+    out.write_text(code)
+    print(f"✓ compiled → {out}")
+    print(f"  run it with:  python {out}"
+          "   (or: python {out} model1,model2,...)")
+    return 0
+
+
 def cmd_hl(args):
     src = Path(args.file).read_text()
     if args.html:
@@ -183,6 +203,9 @@ def main(argv=None):
     rp.add_argument("file")
     rp.add_argument("--models", help="comma-separated ollama models "
                     "(overrides pool declarations)")
+    kp = sub.add_parser("compile")
+    kp.add_argument("file")
+    kp.add_argument("--out", help="output .py path (default: FILE.py)")
     hp = sub.add_parser("hl")
     hp.add_argument("file")
     hp.add_argument("--html", action="store_true")
@@ -191,8 +214,9 @@ def main(argv=None):
     lp.add_argument("workspace", help="a .kimiya directory")
     lp.add_argument("-n", type=int, default=20)
     args = p.parse_args(argv)
-    return {"check": cmd_check, "run": cmd_run, "hl": cmd_hl,
-            "doctor": cmd_doctor, "calibrate": cmd_calibrate}[args.cmd](args)
+    return {"check": cmd_check, "run": cmd_run, "compile": cmd_compile,
+            "hl": cmd_hl, "doctor": cmd_doctor,
+            "calibrate": cmd_calibrate}[args.cmd](args)
 
 
 if __name__ == "__main__":

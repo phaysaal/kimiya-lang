@@ -13,12 +13,35 @@ Zero dependencies (Python 3.11+ stdlib).
 ## Commands
 
 ```bash
-python -m kimiya check prog.kim     # parse + static discipline checks
-python -m kimiya run   prog.kim     # execute; prints the certificate
-python -m kimiya hl    prog.kim     # ANSI highlight (--html for a page)
+python -m kimiya check   prog.kim   # parse + static discipline checks
+python -m kimiya run     prog.kim   # execute; prints the certificate
+python -m kimiya compile prog.kim   # transpile to a standalone prog.py
+python -m kimiya hl      prog.kim   # ANSI highlight (--html for a page)
 python -m kimiya doctor             # local models / family diversity
 python -m kimiya calibrate .kimiya  # label judgments; tighten datasheets
 ```
+
+## Compilation
+
+`kimiya compile prog.kim` emits `prog.py`: the program's control flow
+inlined as plain Python, calling a small shared runtime for the semantic
+operations. It is **not** a speed play — runtime is dominated by model
+latency, not interpreter dispatch. What it buys:
+
+- **Distribution** — `python prog.py` runs without the evaluator; only
+  `kimiya.compiled_runtime` is imported.
+- **Ahead-of-time discipline** — the static checks run at compile time, so
+  a compiled artifact is *guaranteed well-formed*: an ill-formed program
+  never compiles.
+- **Audit** — the emitted Python is the straight-line spine of the
+  program; a reviewer sees exactly what executes (retry loops, the
+  verified gate, egress banners, and the same certificate all appear
+  literally in the source).
+
+Python extensions are re-loaded by the compiled artifact under the same
+audit rules (announced, SHA-checked). The interpreter and the compiled
+runtime are separate code paths, kept honest by the smoke test, which
+runs both and checks they commit with the same result.
 
 Environment: `KIMIYA_OLLAMA_PORT` (default 11434), `KIMIYA_TIMEOUT`
 (seconds per model call), `KIMIYA_MOCK=1` (offline deterministic oracle,

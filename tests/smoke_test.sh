@@ -61,4 +61,13 @@ grep -q "python extension loaded" <<<"$out" \
 grep -q "p95=90" <<<"$out" || { echo "FAIL: pystats math wrong"; echo "$out"; exit 1; }
 test -f reading.txt || { echo "FAIL: reading.txt not written"; exit 1; }
 grep -q "^- n=" reading.txt || { echo "FAIL: bulletize (module fn) output"; exit 1; }
+
+echo "== compile: emit standalone python and run it =="
+KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gs.py >/dev/null
+KIMIYA_MOCK=1 python3 gs.py | grep -q "COMMITTED" \
+  || { echo "FAIL: compiled grounded_summary did not commit"; exit 1; }
+KIMIYA_MOCK=1 python3 -m kimiya compile data_pipeline.kim --out dp.py >/dev/null
+cout=$(KIMIYA_MOCK=1 python3 dp.py)
+grep -q "COMMITTED" <<<"$cout" || { echo "FAIL: compiled data_pipeline"; exit 1; }
+grep -q "p95=90" <<<"$cout" || { echo "FAIL: compiled pystats math"; exit 1; }
 echo "SMOKE TEST PASS"
