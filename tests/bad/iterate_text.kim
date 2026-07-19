@@ -1,0 +1,4 @@
+-- must FAIL (type): forall over a text (should be a list)
+notes := observe file("n.txt")
+forall x in notes.text:
+    print x

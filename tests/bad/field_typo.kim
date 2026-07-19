@@ -1,0 +1,6 @@
+-- must FAIL (type): reading a field the schema does not declare
+pool A = "llama3.1:8b"
+schema Summary:
+    text: text
+s := gen<Summary>("hi") by A
+commit(s.txet)

@@ -1,0 +1,4 @@
+-- must FAIL (type): reading a field of a text value
+pool A = "llama3.1:8b"
+t := gen<Text>("hi") by A
+commit(t.text)

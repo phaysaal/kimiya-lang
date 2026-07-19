@@ -11,7 +11,7 @@ for f in examples/*.kim; do
 done
 
 echo "== hybrid pool: egress is declared and reported =="
-python3 -m kimiya check examples/hybrid_pool.kim | grep -q "all checks pass" \
+python3 -m kimiya check examples/hybrid_pool.kim | grep -q "checks pass" \
   || { echo "FAIL: hybrid_pool rejected"; exit 1; }
 
 echo "== checker: bad programs must be rejected with the right rule =="
@@ -25,6 +25,10 @@ declare -A want=(
   [arity_mismatch]="argument(s)"
   [remote_self_judgment]="J ⋪ C"
   [missing_url]="needs a url"
+  [field_typo]="has no field 'txet'"
+  [field_on_text]="cannot read field"
+  [iterate_text]="cannot iterate a text"
+  [select_text]="expected a list"
 )
 for name in "${!want[@]}"; do
   out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)

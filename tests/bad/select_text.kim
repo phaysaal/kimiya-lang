@@ -1,0 +1,9 @@
+-- must FAIL (type): select store is text, not a list
+pool A = "llama3.1:8b"
+context k:
+    domain     = "d"
+    preserve   = [a]
+    allow_loss = [b]
+notes := observe file("n.txt")
+e := select<0.9>("q", notes.text) under k
+commit(e)

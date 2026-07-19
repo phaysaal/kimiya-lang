@@ -168,6 +168,35 @@ File actions and their effect classes: `file.create` / `file.append` /
 `tests/bad/` contains one minimal program per rule; the smoke test asserts
 each is rejected **with the right diagnosis**.
 
+## Lightweight type checking
+
+A gradual type checker runs alongside the discipline checker (on `check`,
+`run`, and `compile`) and catches shape bugs *before* a model call is
+spent — without false positives. Anything it cannot pin down is
+`Unknown`, and `Unknown` never errors. It knows that:
+
+- `gen<Schema>` yields a record with the schema's fields; `gen<Text>`
+  yields text; `observe file(...)` yields `{text, path, exists, mtime,
+  sha}`;
+- `select` / `lines` / `keys` / `range` yield lists; `join` / `lower` /
+  `trim` / `str` yield text; `len` / `num` yield num; and so on.
+
+So it rejects, at compile time:
+
+| shape bug | example |
+|---|---|
+| field typo on a schema record | `s.txet` where `schema` has `text` |
+| field access on a scalar | `t.text` where `t := gen<Text>(…)` |
+| `forall` over a text | `forall c in notes.text:` (needs `lines(...)`) |
+| `select` over a non-list | `select<…>(q, notes.text)` (needs `lines(...)`) |
+
+It is deliberately *not* the paper's purpose/tolerance type system (the
+graded-effect discipline for substitution safety, supplement A.9): that
+one earns its keep only once the language has a substitution construct,
+which this version does not. This checker is the ergonomic layer — it
+turns a class of "paid for a model call, then crashed on a typo" bugs
+into instant compile errors.
+
 ## Grammar sketch
 
 ```

@@ -22,8 +22,16 @@ from .parser import ParseError
 from .lexer import LexError
 from .loader import load_program, LoadError
 from .checker import check as static_check
+from .types import typecheck
 from .interp import Interp
 from . import highlight
+
+
+def _analyze(prog, py_funcs):
+    """Run discipline check then type check; return (rep, tyrep)."""
+    rep = static_check(prog, frozenset(py_funcs))
+    tyrep = typecheck(prog)
+    return rep, tyrep
 
 
 def _load(path: str):
@@ -49,15 +57,15 @@ def _announce_py(py_exts):
 def cmd_check(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
-    rep = static_check(prog, frozenset(py_funcs))
-    for w in rep.warnings:
+    rep, tyrep = _analyze(prog, py_funcs)
+    for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")
-    for e in rep.errors:
+    for e in rep.errors + tyrep.errors:
         print(f"✗ {e}")
-    if rep.ok:
+    if rep.ok and tyrep.ok:
         n = len(prog.body)
         print(f"✓ {args.file}: {len(prog.decls)} declarations, "
-              f"{n} top-level statements, all checks pass")
+              f"{n} top-level statements, discipline + type checks pass")
         return 0
     return 1
 
@@ -65,11 +73,11 @@ def cmd_check(args):
 def cmd_run(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
-    rep = static_check(prog, frozenset(py_funcs))
-    for w in rep.warnings:
+    rep, tyrep = _analyze(prog, py_funcs)
+    for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")
-    if not rep.ok:
-        for e in rep.errors:
+    if not (rep.ok and tyrep.ok):
+        for e in rep.errors + tyrep.errors:
             print(f"✗ {e}")
         sys.exit("refusing to run an ill-formed program")
     models = args.models.split(",") if args.models else None
@@ -117,11 +125,11 @@ def cmd_run(args):
 def cmd_compile(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
-    rep = static_check(prog, frozenset(py_funcs))
-    for w in rep.warnings:
+    rep, tyrep = _analyze(prog, py_funcs)
+    for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")
-    if not rep.ok:
-        for e in rep.errors:
+    if not (rep.ok and tyrep.ok):
+        for e in rep.errors + tyrep.errors:
             print(f"✗ {e}")
         sys.exit("refusing to compile an ill-formed program")
     from .compiler import compile_program
