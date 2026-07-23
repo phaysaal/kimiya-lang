@@ -26,6 +26,15 @@ gate in front of it. Either classification can be overridden in source
 (`effect screen.confirm recoverable`) when a program knows better — the
 override is then visible to a reviewer, which is the point.
 
+Text entry has two forms, same (recoverable) effect class:
+
+    act screen.type("hello")     -- per-keystroke via xdotool; ASCII-safe,
+                                    but silently drops some accented chars
+    act screen.paste("héllo")    -- clipboard + Ctrl+V; carries UTF-8
+                                    verbatim (accents survive). It replaces
+                                    the clipboard contents — the one side
+                                    effect bought for Unicode fidelity.
+
 Delivery is by an external input driver. `xdotool` synthesizes events at
 the X server, so the application under test cannot distinguish them from
 a human — which matters when the app's own input monitoring is part of
@@ -62,7 +71,8 @@ from pathlib import Path
 ACTIONS: dict[str, int] = {
     "click": 2,      # x, y
     "confirm": 2,    # x, y          (irreversible by default)
-    "type": 1,       # text
+    "type": 1,       # text          (per-keystroke; ASCII-safe)
+    "paste": 1,      # text          (clipboard + Ctrl+V; Unicode-safe)
     "key": 1,        # keysym or chord, e.g. "Return", "ctrl+a"
     "drag": 4,       # x1, y1, x2, y2
     "scroll": 3,     # x, y, ticks   (negative ticks scroll up)
@@ -146,8 +156,11 @@ class Display:
         """Freshness key: one seat is one world."""
         return "screen:" + self.label
 
-    def run(self, argv: list[str], timeout: int = 10):
+    def run(self, argv: list[str], timeout: int = 10, input: bytes | None = None):
         """Run a display-bound command locally or over ssh.
+
+        `input` (bytes), when given, is fed to the command's stdin (over
+        ssh too: stdin is forwarded to the remote command).
 
         BatchMode forbids password prompts — a harness must fail fast on
         missing key auth, not hang waiting for a human to type.
@@ -156,10 +169,11 @@ class Display:
             remote = " ".join(shlex.quote(a) for a in argv)
             cmd = ["ssh", "-o", "BatchMode=yes", self.ssh,
                    f"DISPLAY={shlex.quote(self.resolved_x11)} {remote}"]
-            return subprocess.run(cmd, capture_output=True, timeout=timeout)
+            return subprocess.run(cmd, capture_output=True, timeout=timeout,
+                                  input=input)
         env = dict(os.environ, DISPLAY=self.resolved_x11)
         return subprocess.run(argv, capture_output=True, timeout=timeout,
-                              env=env)
+                              env=env, input=input)
 
 
 def _num(value, action: str, pos: int) -> int:
@@ -194,6 +208,11 @@ def plan(action: str, args: list) -> list[list[str]]:
         return [["mousemove", str(x), str(y)], ["click", "1"]]
     if action == "type":
         return [["type", "--clearmodifiers", "--delay", "12", str(args[0])]]
+    if action == "paste":
+        # The text is loaded onto the clipboard in perform(); the only
+        # keystroke synthesized here is Ctrl+V. The clipboard carries UTF-8
+        # verbatim, so accents that `type` can drop survive intact.
+        return [["key", "--clearmodifiers", "ctrl+v"]]
     if action == "key":
         return [["key", "--clearmodifiers", str(args[0])]]
     if action == "drag":
@@ -263,6 +282,64 @@ def _require_xdotool(disp: Display) -> None:
             "clients.")
 
 
+def _set_clipboard(disp: Display, text: str) -> None:
+    """Load `text` onto the X clipboard for a following Ctrl+V paste.
+
+    xclip / xsel carry arbitrary UTF-8 verbatim, so accented characters that
+    `xdotool type` silently drops survive intact — the whole reason
+    `screen.paste` exists alongside `screen.type`. Loading the clipboard
+    replaces its previous contents; that is the one side effect a program
+    buys for Unicode fidelity.
+
+    The tool's stdout/stderr go to DEVNULL, not a pipe: xclip/xsel fork a
+    daemon that holds the selection and inherits their fds, so capturing the
+    output would block until that daemon exits (i.e. forever).
+    """
+    data = text.encode()
+    try:
+        if disp.ssh:
+            # Same shape as remote capture: one ssh call whose shell
+            # snippet picks whichever of xclip/xsel exists there.
+            # Redirect on the remote or ssh hangs on the backgrounded
+            # daemon holding the channel open.
+            snippet = ("if command -v xclip >/dev/null 2>&1; then "
+                       "xclip -selection clipboard >/dev/null 2>&1; "
+                       "elif command -v xsel >/dev/null 2>&1; then "
+                       "xsel --clipboard --input >/dev/null 2>&1; "
+                       "else echo NOTOOL >&2; exit 9; fi")
+            cmd = ["ssh", "-o", "BatchMode=yes", disp.ssh,
+                   f"DISPLAY={shlex.quote(disp.resolved_x11)} {snippet}"]
+            out = subprocess.run(cmd, input=data, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.PIPE, timeout=10)
+            if out.returncode == 9:
+                raise ScreenError(
+                    f"screen.paste needs xclip or xsel on {disp.ssh} "
+                    "(Debian/Ubuntu: apt install xclip)")
+        else:
+            if shutil.which("xclip"):
+                tool = ["xclip", "-selection", "clipboard"]
+            elif shutil.which("xsel"):
+                tool = ["xsel", "--clipboard", "--input"]
+            else:
+                raise ScreenError(
+                    "screen.paste needs xclip or xsel to load the "
+                    "clipboard (Debian/Ubuntu: apt install xclip). Use "
+                    "screen.type for ASCII-only text where a dropped "
+                    "accent is not a concern.")
+            env = dict(os.environ, DISPLAY=disp.resolved_x11)
+            out = subprocess.run(tool, input=data, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, env=env, timeout=10)
+    except subprocess.TimeoutExpired:
+        raise ScreenError(
+            f"loading the clipboard timed out on {disp.label}") from None
+    if out.returncode != 0:
+        err = (out.stderr.decode(errors="replace").strip()
+               if out.stderr else "")
+        raise ScreenError(
+            f"could not load the clipboard on {disp.label}: "
+            f"{err or out.returncode}")
+
+
 def perform(action: str, args: list, disp: Display | None = None) -> dict:
     """Deliver one screen act on a seat. Returns a record for the trace."""
     disp = disp or Display()
@@ -276,6 +353,9 @@ def perform(action: str, args: list, disp: Display | None = None) -> dict:
         raise ScreenError(f"unknown screen driver {drv!r} "
                           "(known: xdotool, none)")
     _require_xdotool(disp)
+    if action == "paste":
+        # Clipboard must hold the text before the Ctrl+V in argv fires.
+        _set_clipboard(disp, str(args[0]))
     for cmd in argv:
         try:
             out = disp.run(["xdotool", *cmd])

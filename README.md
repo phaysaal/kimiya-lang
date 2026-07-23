@@ -277,7 +277,8 @@ act screen.click(b.x, b.y)           -- the only door for input effects
 
 ```
 act screen.click(x, y)               -- navigate, open, focus  (recoverable)
-act screen.type("Release notes")
+act screen.type("Release notes")     -- per-keystroke; ASCII-safe
+act screen.paste("héllo — genre")    -- clipboard + Ctrl+V; UTF-8 verbatim
 act screen.key("Return")             -- keysym or chord: "ctrl+a"
 act screen.drag(x1, y1, x2, y2)
 act screen.scroll(x, y, ticks)       -- negative ticks scroll up
@@ -290,6 +291,14 @@ GUI input is a world effect, so it belongs in `act` — which is the whole
 point: K4 (no irreversible act in a retry), K5 (no unguarded irreversible
 act) and K6 (no unframed world effect in a retry body) then apply to
 clicking exactly as they do to files. See `examples/gui_publish.kim`.
+
+**`type` vs `paste`.** Both enter text at the focused field with the same
+(recoverable) effect class. `screen.type` synthesizes keystrokes via
+`xdotool type` — fine for ASCII, but `xdotool` silently drops some accented
+characters (a real hazard for non-English text). `screen.paste` loads the
+string onto the X clipboard (xclip/xsel) and sends Ctrl+V, so UTF-8 is
+carried verbatim — accents survive. The one cost is a side effect the
+program should expect: `paste` replaces the clipboard's previous contents.
 
 **Why two clicking actions.** Irreversibility is a property of the
 control, not the coordinates: whether clicking (900, 412) can be undone
@@ -691,9 +700,16 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
   longer exists. The gates catch the divergence (the run abstains), but
   the cache won't warn you first; delete `.kimiya/locates.json` after
   UI changes.
-- `screen.type` text is echoed into the trace (truncated at 200 chars)
-  because that is what makes a run auditable — so do not type secrets;
-  there is no `key_env` indirection for typed input yet.
+- `screen.type` and `screen.paste` text is echoed into the trace
+  (truncated at 200 chars) because that is what makes a run auditable —
+  so do not type or paste secrets; there is no `key_env` indirection for
+  text input yet. `paste` additionally **leaves the text on the seat's
+  clipboard after the run** — a pasted secret outlives the program and is
+  one Ctrl+V away for whoever uses that display next.
+- `screen.paste` sends Ctrl+V, which the focused application must
+  interpret as paste — terminals usually want Ctrl+Shift+V, so paste into
+  a terminal window will not do what you expect. Remote seats need
+  xclip or xsel installed there.
 - Effect classes are per action name, not per call site: declaring
   `effect screen.click irreversible` gates *every* click in the program.
   Use `screen.confirm` for the ones that commit.
