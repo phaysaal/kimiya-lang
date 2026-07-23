@@ -132,8 +132,9 @@ class Compiler:
             return (f"rt.gen({rhs.schema!r}, {self.expr(rhs.prompt)}, {by})")
         if isinstance(rhs, A.SelectExpr):
             ctx = repr(rhs.context) if rhs.context else "None"
+            by = repr(rhs.by) if rhs.by else "None"
             return (f"rt.select({rhs.recall}, {self.expr(rhs.query)}, "
-                    f"{self.expr(rhs.store)}, {ctx})")
+                    f"{self.expr(rhs.store)}, {ctx}, {by})")
         if isinstance(rhs, A.RetryStmt):
             self.retry(rhs, name)
             return "env.get(%r)" % (self._retry_last(rhs.body))
@@ -213,7 +214,9 @@ class Compiler:
         self.emit("from kimiya.compiled_runtime import Runtime, Bolt, "
                   "_to_str, _pyify")
         self.emit()
-        self.emit(f"_AGENTS = {json.dumps(agents)}")
+        # repr, not json.dumps: agent fields may be booleans (vision), and
+        # JSON's `true` is not Python.
+        self.emit(f"_AGENTS = {agents!r}")
         self.emit(f"_CONTEXTS = {json.dumps(contexts)}")
         self.emit(f"_SCHEMAS = {json.dumps(schemas)}")
         self.emit(f"_PY_EXTS = {json.dumps(self.py_exts)}")

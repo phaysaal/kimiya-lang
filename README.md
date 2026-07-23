@@ -84,6 +84,8 @@ python -m kimiya compile prog.kim   # transpile to a standalone prog.py
 python -m kimiya hl      prog.kim   # ANSI highlight (--html for a page)
 python -m kimiya doctor             # local models / family diversity
 python -m kimiya calibrate .kimiya  # label judgments; tighten datasheets
+python -m kimiya datasheet sheets.json .kimiya --source "…"
+                                    # install an externally measured instrument
 ```
 
 ## Compilation
@@ -217,7 +219,14 @@ File actions and their effect classes: `file.create` / `file.append` /
 (**irreversible**). Classes can be re-declared:
 `effect file.append irreversible`.
 
-### The `screen` surface — driving a GUI
+### The `screen` surface — seeing and driving a GUI
+
+```
+shot := observe screen("eDP-1")      -- the only door for what is displayed
+hits := select<0.97>("the Create Group button", shot) under k_ui by L
+b    := first(hits)
+act screen.click(b.x, b.y)           -- the only door for input effects
+```
 
 ```
 act screen.click(x, y)               -- navigate, open, focus  (recoverable)
@@ -273,6 +282,95 @@ and the certificate carries `screen: 4 act(s) via xdotool on screen::0`.
 Drivers: `KIMIYA_SCREEN=xdotool` (default) delivers; `KIMIYA_SCREEN=none`
 records the acts and delivers nothing. `KIMIYA_MOCK=1` implies `none`, so
 the test suite can never touch a real cursor.
+
+### Looking: `observe screen(...)` and the vision locator
+
+```
+shot := observe screen()             -- the whole X screen
+shot := observe screen("eDP-1")      -- one monitor, by xrandr name
+shot := observe screen(0, 561, 1920, 1200)   -- an explicit region
+```
+
+The record is `{path, sha, width, height, x, y, display, region, driver,
+exists}`. `x`/`y` are the **capture origin**, and they are the reason a
+two-monitor test works: a box found inside a capture is mapped through
+that origin, so `b.x`/`b.y` are absolute screen coordinates that `act
+screen.click` can use directly. Capture uses whichever of `maim`,
+`import` (ImageMagick), `scrot` or `gnome-screenshot` is installed.
+
+`select` over a screenshot is the same construct as `select` over a list
+— retrieval, best first — with a vision model behind it instead of a
+keyword filter. It returns controls: `{x, y, w, h, left, top, label,
+confidence}`, where `x, y` is the centre.
+
+**A screen store carries obligations a text store does not** (K10–K12),
+because it stops being a mechanical filter and becomes an instrument:
+
+| rule | rejected program shape |
+|---|---|
+| K10 | `select` over a screenshot with no `by <agent>` (nothing named what read the image) or no `under <purpose>` (nothing to key the datasheet by) |
+| K11 | `by` a model that cannot see — it would answer about an image it never saw |
+| K12 | `shows(...)` over a non-screenshot, or with panel members that cannot see |
+
+Vision capability is inferred from the model id and can be stated:
+
+```
+agent L:
+    backend = "ollama"
+    model   = "llama3.2-vision:11b"
+    vision  = true
+```
+
+### `shows` — judging a screenshot
+
+```
+if judge<3,2/3> shows(shot, "a success view with an 8-character join code")
+        under k_state panel [J1, J2]:
+```
+
+A fourth judged relation alongside `|=`, `~` and `contradicts`, whose
+left side is an image. The panel votes on the screenshot itself, and the
+cross-provenance rule (J ⋪ C) applies unchanged — one family still
+cannot certify its own output, and now one *pair of eyes* cannot either.
+
+### θ takes the measured rate, not the claim
+
+This is the point of routing a locate through the language rather than
+calling a vision API. A vision `select` contributes its datasheet's
+conservative end to θ under the task `locate:<context>` — exactly like a
+judged relation — **not** the recall written in the source. The declared
+recall stays as the programmer's coverage claim, and it is checked
+against the measured β on every run:
+
+```
+⚠ line 46: declared recall 0.97 exceeds the measured β≥0.600 of
+  instrument locate:k_ui — θ uses the measured end, not the claim
+```
+
+Instruments start prior-grade. An instrument measured by a separate
+campaign can be installed, and provenance is mandatory — a sheet with no
+source is a number with no history:
+
+```bash
+python -m kimiya datasheet sheets.json .kimiya \
+  --source "harness campaign, 58 runs / 343 locate calls"
+```
+
+The certificate then cites where the numbers came from, and θ moves:
+
+```
+  θ      : 0.8599   (factors: [('locate:k_ui', 0.9746), … ('shows:k_state', 0.9763)])
+  instrument locate:k_ui: α≤0.16 β≥0.97 [measured: harness campaign, 58 runs …]
+  screen : 8 act(s) via xdotool on screen::0, 4 locate(s)
+```
+
+The same program against prior-grade sheets commits at θ = 0.047. Both
+runs pass; they are not equally strong evidence, and the certificate is
+what says so. See `examples/gui_collab.kim` — a two-user collaboration
+test (create a group, carry the join code, verify the chat) where the two
+actors are two monitors of one X screen.
+
+### Driving a GUI
 
 **Do not smuggle clicks through a Python extension.** `pyfn click =
 "gui.click"` would run, but `pyfn` is declared **kernel-grade, certainty
@@ -349,6 +447,10 @@ rhs      := gen<SCHEMA>(E) [by POOL]
 GUARD    := check E
           | judge<K,TAU> (E |= E | E ~ E | E contradicts E) under CTX
             [panel [P,...]] [paraphrase_prompts N]
+          | judge<K,TAU> shows(E, E) under CTX [panel [P,...]]
+rhs      := ... | select<RECALL>(E, E) [under CTX] [by POOL]
+                                       -- `by` required for a screen store
+          | observe screen([NAME | x, y, w, h])
 ```
 
 Comments `--`; indentation is significant (spaces only). Builtins: `len
@@ -424,11 +526,22 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
 - Two surfaces (`file`, `screen`). Sockets, processes, and clipboard are
   future surfaces; each will need its own effect classes and delivery
   contracts.
-- The `screen` surface is **acts only**. There is no `observe
-  screen(...)` (screenshots) and no vision-backed `select`, so a program
-  gets its coordinates from a locator file or a kernel oracle rather than
-  by looking. The checker says so at check time instead of failing at
-  runtime after the program has already clicked things.
+- `select` over a **text** store is still a mechanical keyword filter and
+  its declared recall is still the programmer's claim. Only the vision
+  path is instrument-backed.
+- There is no agent-indexed `act<A>` / `settle<A>`: a program drives one
+  display. Multiple actors are staged as multiple monitors (see
+  `examples/gui_collab.kim`), which works because captures carry their
+  origin, but two actors on *separate machines* are not expressible.
+- `observe screen(...)` under `KIMIYA_SCREEN=none` serves
+  `KIMIYA_SCREEN_FIXTURE` if set and otherwise reports `exists: false`;
+  a program that does not check `.exists` will abstain rather than judge
+  a screenshot that was never taken.
+- Vision capability is inferred from model-id patterns, which will lag
+  new releases; `vision = true` is the override.
+- Boxes are read from the model as 0–1000 normalized coordinates
+  (Gemini-style `box_2d`). A model that answers in pixels will be
+  misread — there is no unit sniffing.
 - `screen.type` text is echoed into the trace (truncated at 200 chars)
   because that is what makes a run auditable — so do not type secrets;
   there is no `key_env` indirection for typed input yet.

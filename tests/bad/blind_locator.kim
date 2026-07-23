@@ -1,0 +1,11 @@
+-- K11: a text-only model cannot localize a control in a screenshot; it
+-- would answer about an image it never saw.
+pool A = "llama3.1:8b"
+
+context k_ui:
+    domain     = "GUI control matching a description on a screenshot"
+    preserve   = [role, visible_label]
+    allow_loss = [theme]
+
+shot := observe screen("eDP-1")
+hits := select<0.97>("the Create Group button", shot) under k_ui by A

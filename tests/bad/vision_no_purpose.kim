@@ -1,0 +1,8 @@
+-- A judged reading needs a purpose: its datasheet is keyed by one.
+agent L:
+    backend = "ollama"
+    model   = "llama3.2-vision:11b"
+    vision  = true
+
+shot := observe screen("eDP-1")
+hits := select<0.97>("the Create Group button", shot) by L

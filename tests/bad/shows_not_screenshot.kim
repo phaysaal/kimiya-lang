@@ -1,0 +1,14 @@
+-- shows(...) is a claim about an image, not about a text file.
+pool A = "llama3.1:8b"
+pool B = "gemma2:9b"
+
+context k_state:
+    domain     = "whether a screenshot shows a described UI state"
+    preserve   = [key_widgets, key_text]
+    allow_loss = [theme]
+
+notes := observe file("notes.txt")
+if judge<3,2/3> shows(notes, "a success view") under k_state panel [B]:
+    commit("ok")
+else:
+    abstain

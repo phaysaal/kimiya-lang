@@ -158,6 +158,7 @@ class SelectExpr:
     query: object
     store: object
     context: str | None
+    by: str | None = None     # instrument agent, required for a screen store
     line: int = 0
 
 

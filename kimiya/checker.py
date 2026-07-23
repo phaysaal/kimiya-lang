@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from . import ast_nodes as A
 from . import screen
-from .runtime import family_of
+from .runtime import Agent, family_of
 
 BUILTIN_SCHEMAS = {"Text", "Json"}
 BUILTIN_FUNCS = {
@@ -36,7 +36,7 @@ KNOWN_ACTIONS = {("file", "create"), ("file", "append"),
 # (mkdir takes 1, append takes 2), so only `screen` is pinned here.
 ACTION_ARITY = {("screen", a): n for a, n in screen.ACTIONS.items()}
 KNOWN_SURFACES = {"file", "screen"}
-OBSERVE_SURFACES = {"file"}  # `observe screen(...)` is a later increment
+OBSERVE_SURFACES = {"file", "screen"}
 
 
 def _substmts(s) -> list[list]:
@@ -71,6 +71,8 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
     r = CheckReport()
     pools = {d.name: d.model for d in prog.decls
              if isinstance(d, A.PoolDecl)}
+    can_see = {d.name: Agent(name=d.name, model=d.model).vision
+               for d in prog.decls if isinstance(d, A.PoolDecl)}
     for d in prog.decls:
         if isinstance(d, A.AgentDecl):
             fk = d.fields
@@ -90,6 +92,9 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             fam = fk.get("family") or family_of(fk.get("model", ""))
             pools[d.name] = "override://" + fam if fk.get("family") \
                 else fk.get("model", "")
+            can_see[d.name] = Agent(
+                name=d.name, model=fk.get("model", ""),
+                vision_declared=fk.get("vision")).vision
     contexts = {d.name for d in prog.decls if isinstance(d, A.ContextDecl)}
     schemas = ({d.name for d in prog.decls if isinstance(d, A.SchemaDecl)}
                | BUILTIN_SCHEMAS)
@@ -143,13 +148,9 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             for _, x in e.fields:
                 chk_expr(x)
         elif isinstance(e, A.ObserveExpr):
-            if e.surface == "screen":
-                r.err(e.line, "observe screen(...) is not implemented — the "
-                              "screen surface supports acts only; read world "
-                              "state through a kernel oracle (use python) or "
-                              "observe file(...)")
-            elif e.surface not in OBSERVE_SURFACES:
-                r.err(e.line, f"unknown observe surface '{e.surface}'")
+            if e.surface not in OBSERVE_SURFACES:
+                r.err(e.line, f"unknown observe surface '{e.surface}' "
+                              f"(known: {', '.join(sorted(OBSERVE_SURFACES))})")
             for a in e.args:
                 chk_expr(a)
 
@@ -182,6 +183,62 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
         chk_expr(g.left)
         if g.right is not None:
             chk_expr(g.right)
+        chk_shows(g)
+
+    # ---------- the vision instrument (K10-K12) ----------
+    # A screen store turns `select` from a mechanical filter into a
+    # measured instrument, so it acquires the obligations a judged step
+    # has: name the instrument, state the purpose it reads under, and use
+    # something that can actually see.
+    screenshots: set[str] = set()
+
+    def is_screenshot(e) -> bool:
+        if isinstance(e, A.ObserveExpr):
+            return e.surface == "screen"
+        return isinstance(e, A.Var) and e.name in screenshots
+
+    def chk_vision_select(sel: A.SelectExpr):
+        if not is_screenshot(sel.store):
+            if sel.by:
+                r.warn(sel.line,
+                       f"'by {sel.by}' on a select over a non-screen store "
+                       "has no effect — text select is a mechanical filter, "
+                       "no model is consulted")
+            return
+        if not sel.by:
+            r.err(sel.line,
+                  "select over a screenshot needs an instrument: add "
+                  "`by <agent>`. Localizing a control is a model reading "
+                  "an image, and the certificate must name what read it")
+        elif sel.by not in pools:
+            r.err(sel.line, f"'by {sel.by}': not a declared pool")
+        elif not can_see[sel.by]:
+            r.err(sel.line,
+                  f"'by {sel.by}': {pools[sel.by]} is not vision-capable — "
+                  "it would answer about a screenshot it never saw. "
+                  "Declare `vision = true` on the agent if it can see")
+        if not sel.context:
+            r.err(sel.line,
+                  "select over a screenshot must cite a purpose (`under "
+                  "<context>`) — it is a judged reading, and its datasheet "
+                  "is keyed by that purpose")
+
+    def chk_shows(g: A.JudgeGuard):
+        if g.relation != "shows":
+            return
+        if not is_screenshot(g.left):
+            r.err(g.line,
+                  "shows(...) takes a screenshot as its first argument "
+                  "(from `observe screen(...)`) — it is a claim about an "
+                  "image")
+        blind = [p for p in (g.panel or list(pools))
+                 if p in can_see and not can_see[p]]
+        if blind:
+            r.err(g.line,
+                  f"shows(...) panel member(s) {', '.join(blind)} are not "
+                  "vision-capable — they would vote on a screenshot they "
+                  "never saw. Declare `vision = true`, or panel only on "
+                  "agents that can see")
 
     # ---------- statements ----------
     def body_generator(stmts):
@@ -230,11 +287,16 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                                     f"'{rhs.context}'")
                 chk_expr(rhs.query)
                 chk_expr(rhs.store)
+                chk_vision_select(rhs)
             elif isinstance(rhs, A.RetryStmt):
                 chk_retry(rhs)
             else:
                 chk_expr(rhs)
             defined.add(s.name)
+            if is_screenshot(rhs):
+                screenshots.add(s.name)
+            else:
+                screenshots.discard(s.name)
         elif isinstance(s, (A.CheckStmt, A.PrintStmt, A.CommitStmt)):
             chk_expr(s.expr)
         elif isinstance(s, A.AbstainStmt):

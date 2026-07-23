@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import ast_nodes as A
 from . import screen
+from . import vision
 from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle, run_judge,
                       run_gen)
 
@@ -91,7 +92,8 @@ class Interp:
                     name=d.name, model=f.get("model", ""),
                     backend=f.get("backend", "ollama"),
                     url=f.get("url"), key_env=f.get("key_env"),
-                    family_override=f.get("family"))
+                    family_override=f.get("family"),
+                    vision_declared=f.get("vision"))
         if models_override:
             bindings = {f"M{i}": Agent(name=f"M{i}", model=m)
                         for i, m in enumerate(models_override)}
@@ -104,10 +106,14 @@ class Interp:
         self.last_act: dict[str, float] = {}
         self.last_obs: dict[str, float] = {}
         self.screen_acts = 0
+        self.locates = 0
+        self.overclaims: list[str] = []
         self.committed = None
 
     # ------------------------------------------------ purpose text
-    def purpose_text(self, name: str) -> str:
+    def purpose_text(self, name: str | None) -> str:
+        if name is None:
+            return "unscoped"
         c = self.contexts.get(name)
         if not c:
             return name
@@ -132,7 +138,11 @@ class Interp:
         theta = 1.0
         for _, f in self.theta:
             theta *= f
-        tasks = sorted({name for name, _ in self.theta
+        # A negative reading is the same instrument, read the other way —
+        # report it under the instrument's own name, not "neg:…", which
+        # has no datasheet and would print as prior-grade.
+        tasks = sorted({name[4:] if name.startswith("neg:") else name
+                        for name, _ in self.theta
                         if not name.startswith("select")})
         return {
             "status": status,
@@ -151,8 +161,10 @@ class Interp:
                               if not a.is_local}),
             "screen": ({"driver": screen.driver_name(),
                         "target": screen.target(),
-                        "acts": self.screen_acts}
-                       if self.screen_acts else None),
+                        "acts": self.screen_acts,
+                        "locates": self.locates}
+                       if self.screen_acts or self.locates else None),
+            "overclaims": list(self.overclaims),
             "cost": dict(self.cost, seconds=round(secs, 1)),
             "trace_records": self.trace.count(),
         }
@@ -229,8 +241,11 @@ class Interp:
         return run_gen(self.oracle, self.trace, agent, prompt, fields)
 
     def eval_select(self, sel: A.SelectExpr):
+        store_val = self.eval(sel.store)
+        if isinstance(store_val, dict) and store_val.get("kind") == "screen":
+            return self.select_vision(sel, store_val)
         query = self.to_str(self.eval(sel.query)).lower()
-        store = self.as_list(self.eval(sel.store), sel.line)
+        store = self.as_list(store_val, sel.line)
         words = {w for w in query.split() if len(w) > 3}
 
         def score(item):
@@ -245,6 +260,44 @@ class Interp:
                            "line": sel.line})
         return hits
 
+    def select_vision(self, sel: A.SelectExpr, shot: dict):
+        """`select` over a screenshot: retrieval by a measured instrument.
+
+        θ takes the datasheet's conservative end, not the recall the
+        programmer declared — a locate is an instrument reading, and the
+        certificate should carry the rate the instrument was measured at.
+        The declared recall stays a coverage claim, and overclaiming it
+        against the measured β is reported on every run.
+        """
+        if not shot.get("exists"):
+            raise Bolt(
+                f"select at line {sel.line}: no screenshot to look at — "
+                "`observe screen(...)` returned exists: false (driver "
+                f"{shot.get('driver')!r})")
+        agent = (self.pool.agent(sel.by) if sel.by
+                 else self.pool.default_generator())
+        query = self.to_str(self.eval(sel.query))
+        hits = vision.locate(self.oracle, agent, self.trace, shot, query,
+                             self.purpose_text(sel.context), sel.context)
+        task = vision.locate_task(sel.context)
+        sheet = self.sheets.get(task)
+        self.locates += 1
+        if hits:
+            self.theta.append((task, sheet["beta_lo"]))
+        else:
+            self.theta.append((f"neg:{task}", 1 - sheet["alpha_hi"]))
+        if sel.recall > sheet["beta_lo"]:
+            note = (f"line {sel.line}: declared recall {sel.recall} exceeds "
+                    f"the measured β≥{sheet['beta_lo']:.3f} of instrument "
+                    f"{task} — θ uses the measured end, not the claim")
+            if note not in self.overclaims:
+                self.overclaims.append(note)
+            self.trace.append({"kind": "overclaim", "task": task,
+                               "declared_recall": sel.recall,
+                               "measured_beta_lo": sheet["beta_lo"],
+                               "line": sel.line})
+        return hits
+
     # ------------------------------------------------ guards
     def eval_guard(self, g) -> bool:
         if isinstance(g, A.CheckGuard):
@@ -253,10 +306,28 @@ class Interp:
                                "line": g.line})
             return v
         assert isinstance(g, A.JudgeGuard)
-        left = self.to_str(self.eval(g.left))
-        right = self.to_str(self.eval(g.right)) if g.right is not None else ""
         purpose = self.purpose_text(g.context)
         task = f"{g.relation}:{g.context}"
+        images = None
+        if g.relation == "shows":
+            shot = self.eval(g.left)
+            if not (isinstance(shot, dict) and shot.get("kind") == "screen"):
+                raise KimiyaRuntimeError(
+                    f"line {g.line}: shows(...) needs a screenshot as its "
+                    "first argument (from `observe screen(...)`)")
+            if not shot.get("exists"):
+                raise Bolt(
+                    f"shows at line {g.line}: no screenshot to judge — "
+                    "`observe screen(...)` returned exists: false")
+            images = [shot["path"]]
+            left = (f"screenshot of {shot['region']} on {shot['display']}, "
+                    f"{shot['width']}x{shot['height']} at origin "
+                    f"({shot['x']}, {shot['y']}), sha {shot['sha']}")
+            right = self.to_str(self.eval(g.right))
+            evidence, claim = left, f"The screenshot shows: {right}"
+            return self.run_guard(g, task, claim, evidence, purpose, images)
+        left = self.to_str(self.eval(g.left))
+        right = self.to_str(self.eval(g.right)) if g.right is not None else ""
         if g.relation == "entails":
             evidence, claim = left, f"The evidence supports: {right}"
         elif g.relation == "equiv":
@@ -267,10 +338,13 @@ class Interp:
             claim = "A and B are in direct contradiction"
         else:
             evidence, claim = left, f"The value satisfies: {purpose}"
+        return self.run_guard(g, task, claim, evidence, purpose)
+
+    def run_guard(self, g, task, claim, evidence, purpose, images=None):
         generator = self.last_gen_model or self.pool.default_generator()
         j = run_judge(self.pool, self.oracle, self.trace, self.sheets,
                       task, claim, evidence, generator, g.k, g.tau,
-                      purpose, g.panel, g.paraphrases)
+                      purpose, g.panel, g.paraphrases, images)
         self.cost["judge_votes"] += g.k
         if not j.certified:
             self.uncertified += 1
@@ -454,8 +528,10 @@ class Interp:
         raise KimiyaRuntimeError(f"cannot evaluate {e}")
 
     def observe(self, e: A.ObserveExpr):
-        path = Path(str(self.eval(e.args[0])))
         self.cost["observes"] += 1
+        if e.surface == "screen":
+            return self.observe_screen(e)
+        path = Path(str(self.eval(e.args[0])))
         self.last_obs[str(path)] = time.time()
         if not path.exists():
             self.trace.append({"kind": "observe", "path": str(path),
@@ -469,6 +545,18 @@ class Interp:
         self.trace.append({"kind": "observe", "path": str(path),
                            "exists": True, "sha": rec["sha"],
                            "line": e.line})
+        return rec
+
+    def observe_screen(self, e: A.ObserveExpr):
+        args = [self.eval(a) for a in e.args]
+        try:
+            rec = screen.capture(args, self.workspace / "shots")
+        except screen.ScreenError as ex:
+            raise KimiyaRuntimeError(f"line {e.line}: {ex}") from None
+        self.last_obs[screen.target()] = time.time()
+        self.trace.append({"kind": "observe", "surface": "screen",
+                           "line": e.line,
+                           **{k: v for k, v in rec.items() if k != "kind"}})
         return rec
 
     def binop(self, e: A.BinOp):

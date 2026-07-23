@@ -147,6 +147,8 @@ def cmd_run(args):
               "a cross-provenance panel: UNCERTIFIED")
     for task, s in cert["instruments"].items():
         tag = "calibrated" if s["calibrated"] else "prior-grade"
+        if s.get("source"):
+            tag = f"measured: {s['source']}"
         print(f"  instrument {task}: α≤{s['alpha_hi']:.2f} "
               f"β≥{s['beta_lo']:.2f} [{tag}]")
     if cert["egress"]:
@@ -157,7 +159,10 @@ def cmd_run(args):
     if cert.get("screen"):
         sc = cert["screen"]
         print(f"  screen : {sc['acts']} act(s) via {sc['driver']} "
-              f"on {sc['target']}")
+              f"on {sc['target']}"
+              + (f", {sc['locates']} locate(s)" if sc.get("locates") else ""))
+    for note in cert.get("overclaims", []):
+        print(f"  ⚠ {note}")
     c = cert["cost"]
     print(f"  cost   : {c['gen_calls']} gen, {c['judge_votes']} votes, "
           f"{c['acts']} acts, {c['observes']} observes, {c['seconds']}s")
@@ -248,6 +253,46 @@ def cmd_calibrate(args):
     return 0
 
 
+def cmd_datasheet(args):
+    """Install an instrument measured outside this workspace.
+
+    The file is a JSON object of task -> {alpha_hi, beta_lo, ...}, or a
+    single sheet when --task names the instrument. Provenance is
+    mandatory: a sheet with no source is a number with no history, and
+    the certificate would present it as if it had been earned here.
+    """
+    ws = Path(args.workspace)
+    ws.mkdir(parents=True, exist_ok=True)
+    sheets = Datasheets(ws)
+    data = json.loads(Path(args.file).read_text())
+    incoming = {args.task: data} if args.task else data
+    installed = []
+    for task, sheet in incoming.items():
+        if not isinstance(sheet, dict) or "beta_lo" not in sheet:
+            print(f"✗ {task}: not a datasheet (needs at least beta_lo)")
+            return 1
+        merged = {"alpha_hi": float(sheet.get("alpha_hi", 1.0)),
+                  "beta_lo": float(sheet["beta_lo"]),
+                  "n_true": int(sheet.get("n_true", 0)),
+                  "n_false": int(sheet.get("n_false", 0)),
+                  "calibrated": True,
+                  "source": args.source or sheet.get("source") or ""}
+        if not merged["source"]:
+            print(f"✗ {task}: refusing to install a sheet with no source — "
+                  "pass --source \"<how it was measured>\"")
+            return 1
+        if not (0 <= merged["beta_lo"] <= 1 and 0 <= merged["alpha_hi"] <= 1):
+            print(f"✗ {task}: α and β must lie in [0, 1]")
+            return 1
+        sheets.install(task, merged)
+        installed.append((task, merged))
+    for task, s in installed:
+        print(f"✓ {task}: α≤{s['alpha_hi']:.3f} β≥{s['beta_lo']:.3f} "
+              f"[imported: {s['source']}]")
+    print(f"  written to {sheets.local_path}")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="kimiya", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -267,10 +312,18 @@ def main(argv=None):
     lp = sub.add_parser("calibrate")
     lp.add_argument("workspace", help="a .kimiya directory")
     lp.add_argument("-n", type=int, default=20)
+    dp = sub.add_parser("datasheet",
+                        help="install an externally measured instrument")
+    dp.add_argument("file", help="JSON: task -> {alpha_hi, beta_lo, ...}")
+    dp.add_argument("workspace", help="a .kimiya directory")
+    dp.add_argument("--task", help="install FILE as this single instrument, "
+                    "e.g. locate:k_ui")
+    dp.add_argument("--source", help="how it was measured (required)")
     args = p.parse_args(argv)
     return {"check": cmd_check, "run": cmd_run, "compile": cmd_compile,
             "hl": cmd_hl, "doctor": cmd_doctor,
-            "calibrate": cmd_calibrate}[args.cmd](args)
+            "calibrate": cmd_calibrate,
+            "datasheet": cmd_datasheet}[args.cmd](args)
 
 
 if __name__ == "__main__":

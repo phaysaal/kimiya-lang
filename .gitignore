@@ -5,3 +5,4 @@ __pycache__/
 examples/*.py
 !examples/pystats.py
 !examples/guiprobe.py
+!examples/collabdb.py

@@ -1,0 +1,14 @@
+-- K12: a shows(...) panel votes on an image; text-only members cannot.
+pool A = "llama3.1:8b"
+pool B = "gemma2:9b"
+
+context k_state:
+    domain     = "whether a screenshot shows a described UI state"
+    preserve   = [key_widgets, key_text]
+    allow_loss = [theme]
+
+shot := observe screen("eDP-1")
+if judge<3,2/3> shows(shot, "a success view") under k_state panel [B]:
+    commit("ok")
+else:
+    abstain

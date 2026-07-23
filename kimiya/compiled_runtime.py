@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from . import screen
+from . import vision
 from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle,
                       run_judge, run_gen)
 
@@ -44,7 +45,8 @@ class Runtime:
             binds[a["name"]] = Agent(
                 name=a["name"], model=a.get("model", ""),
                 backend=a.get("backend", "ollama"), url=a.get("url"),
-                key_env=a.get("key_env"), family_override=a.get("family"))
+                key_env=a.get("key_env"), family_override=a.get("family"),
+                vision_declared=a.get("vision"))
         if models_override:
             binds = {f"M{i}": Agent(name=f"M{i}", model=m)
                      for i, m in enumerate(models_override)}
@@ -54,6 +56,8 @@ class Runtime:
                      "observes": 0}
         self.uncertified = 0
         self.screen_acts = 0
+        self.locates = 0
+        self.overclaims = []
         self.last_gen: Agent | None = None
         self.committed = None
 
@@ -75,7 +79,9 @@ class Runtime:
         fields = self.schemas[schema]
         return run_gen(self.oracle, self.trace, agent, prompt, fields)
 
-    def select(self, recall: float, query: str, store: list, ctx):
+    def select(self, recall: float, query: str, store, ctx, by=None):
+        if isinstance(store, dict) and store.get("kind") == "screen":
+            return self.select_vision(recall, query, store, ctx, by)
         words = {w for w in str(query).lower().split() if len(w) > 3}
 
         def score(x):
@@ -89,11 +95,54 @@ class Runtime:
                            "store_size": len(store), "hits": len(hits)})
         return hits
 
+    def select_vision(self, recall, query, shot, ctx, by):
+        if not shot.get("exists"):
+            raise Bolt("select: no screenshot to look at — observe screen "
+                       "returned exists: false")
+        agent = (self.pool.agent(by) if by
+                 else self.pool.default_generator())
+        purpose = self.contexts.get(ctx, ctx or "unscoped")
+        hits = vision.locate(self.oracle, agent, self.trace, shot,
+                             _to_str(query), purpose, ctx)
+        task = vision.locate_task(ctx)
+        sheet = self.sheets.get(task)
+        self.locates += 1
+        self.theta.append((task if hits else f"neg:{task}",
+                           sheet["beta_lo"] if hits
+                           else 1 - sheet["alpha_hi"]))
+        if recall > sheet["beta_lo"]:
+            note = (f"declared recall {recall} exceeds the measured "
+                    f"β≥{sheet['beta_lo']:.3f} of instrument {task} — θ "
+                    "uses the measured end, not the claim")
+            if note not in self.overclaims:
+                self.overclaims.append(note)
+            self.trace.append({"kind": "overclaim", "task": task,
+                               "declared_recall": recall,
+                               "measured_beta_lo": sheet["beta_lo"]})
+        return hits
+
     def judge(self, k, tau, relation, left, right, ctx_name,
               panel, paraphrases):
         purpose = self.contexts.get(ctx_name, ctx_name)
-        left, right = _to_str(left), _to_str(right) if right is not None else ""
         task = f"{relation}:{ctx_name}"
+        images = None
+        if relation == "shows":
+            shot = left
+            if not (isinstance(shot, dict) and shot.get("kind") == "screen"):
+                raise Bolt("shows(...) needs a screenshot as its first "
+                           "argument (from observe screen(...))")
+            if not shot.get("exists"):
+                raise Bolt("shows: no screenshot to judge — observe screen "
+                           "returned exists: false")
+            images = [shot["path"]]
+            evidence = (f"screenshot of {shot['region']} on "
+                        f"{shot['display']}, {shot['width']}x"
+                        f"{shot['height']} at origin ({shot['x']}, "
+                        f"{shot['y']}), sha {shot['sha']}")
+            claim = f"The screenshot shows: {_to_str(right)}"
+            return self._run_judge(k, tau, task, claim, evidence, purpose,
+                                   panel, paraphrases, images)
+        left, right = _to_str(left), _to_str(right) if right is not None else ""
         if relation == "entails":
             evidence, claim = left, f"The evidence supports: {right}"
         elif relation == "equiv":
@@ -104,10 +153,15 @@ class Runtime:
             claim = "A and B are in direct contradiction"
         else:
             evidence, claim = left, f"The value satisfies: {purpose}"
+        return self._run_judge(k, tau, task, claim, evidence, purpose,
+                               panel, paraphrases)
+
+    def _run_judge(self, k, tau, task, claim, evidence, purpose, panel,
+                   paraphrases, images=None):
         gen = self.last_gen or self.pool.default_generator()
         j = run_judge(self.pool, self.oracle, self.trace, self.sheets,
                       task, claim, evidence, gen, k, tau, purpose,
-                      panel, paraphrases)
+                      panel, paraphrases, images)
         self.cost["judge_votes"] += k
         if not j.certified:
             self.uncertified += 1
@@ -135,8 +189,17 @@ class Runtime:
         raise Bolt(f"abstain at line {line}")
 
     def observe(self, surface, args):
-        path = Path(_to_str(args[0]))
         self.cost["observes"] += 1
+        if surface == "screen":
+            try:
+                rec = screen.capture(args, self.workspace / "shots")
+            except screen.ScreenError as e:
+                raise Bolt(str(e)) from None
+            self.trace.append({"kind": "observe", "surface": "screen",
+                               **{k: v for k, v in rec.items()
+                                  if k != "kind"}})
+            return rec
+        path = Path(_to_str(args[0]))
         if not path.exists():
             return {"text": "", "path": str(path), "exists": False,
                     "mtime": 0, "sha": ""}
@@ -237,7 +300,9 @@ class Runtime:
         theta = 1.0
         for _, x in self.theta:
             theta *= x
-        tasks = sorted({n for n, _ in self.theta if not n.startswith("select")})
+        tasks = sorted({n[4:] if n.startswith("neg:") else n
+                        for n, _ in self.theta
+                        if not n.startswith("select")})
         egress = sorted({a.host for a in self.pool.agents if not a.is_local})
         cert = {
             "status": status, "reason": reason, "value": self.committed,
@@ -249,8 +314,10 @@ class Runtime:
             "egress": egress,
             "screen": ({"driver": screen.driver_name(),
                         "target": screen.target(),
-                        "acts": self.screen_acts}
-                       if self.screen_acts else None),
+                        "acts": self.screen_acts,
+                        "locates": self.locates}
+                       if self.screen_acts or self.locates else None),
+            "overclaims": list(self.overclaims),
             "cost": dict(self.cost), "trace_records": self.trace.count(),
         }
         (self.workspace / "certificate.json").write_text(
@@ -271,7 +338,11 @@ class Runtime:
         if cert["screen"]:
             sc = cert["screen"]
             print(f"  screen : {sc['acts']} act(s) via {sc['driver']} "
-                  f"on {sc['target']}")
+                  f"on {sc['target']}"
+                  + (f", {sc['locates']} locate(s)" if sc.get("locates")
+                     else ""))
+        for note in cert["overclaims"]:
+            print(f"  ⚠ {note}")
         c = cert["cost"]
         print(f"  cost   : {c['gen_calls']} gen, {c['judge_votes']} votes, "
               f"{c['acts']} acts, {c['observes']} observes")

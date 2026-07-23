@@ -89,6 +89,21 @@ OBSERVATION = RecordTy(
     {"text": TEXT, "path": TEXT, "exists": BOOL, "mtime": NUM, "sha": TEXT},
     origin="observation")
 
+# `observe screen(...)`. Distinct from a file observation: it has no
+# .text (nothing was read, only captured), and it carries the capture
+# origin so coordinates can be mapped back to the whole display.
+SCREENSHOT = RecordTy(
+    {"kind": TEXT, "path": TEXT, "sha": TEXT, "exists": BOOL,
+     "width": NUM, "height": NUM, "x": NUM, "y": NUM,
+     "display": TEXT, "region": TEXT, "driver": TEXT},
+    origin="screenshot")
+
+# What a vision `select` yields: x/y are the control's centre in absolute
+# screen coordinates, ready to hand to `act screen.click`.
+CONTROL = RecordTy(
+    {"x": NUM, "y": NUM, "w": NUM, "h": NUM, "left": NUM, "top": NUM,
+     "label": TEXT, "confidence": NUM}, origin="control")
+
 SCHEMA_FIELD_TYPES = {
     "text": TEXT, "string": TEXT, "str": TEXT,
     "num": NUM, "number": NUM, "int": NUM, "float": NUM,
@@ -182,7 +197,7 @@ def typecheck(prog: A.Program) -> TypeReport:
                 return base.elem
             return UNKNOWN
         if isinstance(e, A.ObserveExpr):
-            return OBSERVATION
+            return SCREENSHOT if e.surface == "screen" else OBSERVATION
         if isinstance(e, A.Call):
             return ty_call(e, env)
         if isinstance(e, A.BinOp):
@@ -232,6 +247,8 @@ def typecheck(prog: A.Program) -> TypeReport:
             return UNKNOWN         # Json
         if isinstance(rhs, A.SelectExpr):
             st = ty(rhs.store, env)
+            if st == SCREENSHOT:            # the vision instrument
+                return ListTy(CONTROL)
             if st in (TEXT, NUM, BOOL):
                 r.err(rhs.line, f"select store is {st!r}, expected a list "
                                 "(wrap a text with lines(...))")

@@ -1,12 +1,14 @@
-"""The `screen` surface: OS-level GUI input as audited Kimiya acts.
+"""The `screen` surface: a GUI as an observable, effectable world.
 
-This is increment 1 of the GUI surface. Only `act` lives here; `observe
-screen(...)` (screenshots) and a vision-backed `select` are a later
-increment. What increment 1 buys is the discipline: a click delivered
-through `act screen.…` is a world effect the checker can see, so K4
-(no irreversible act inside a retry), K5 (no unguarded irreversible
-act) and K6 (no unframed world effect in a retry body) apply to GUI
-driving exactly as they do to files.
+Two halves, matching the two doors the world extension allows:
+
+    observe screen(...)   the only door for what is on the display
+    act screen.…          the only door for input effects
+
+A click delivered through `act screen.…` is a world effect the checker
+can see, so K4 (no irreversible act inside a retry), K5 (no unguarded
+irreversible act) and K6 (no unframed world effect in a retry body)
+apply to GUI driving exactly as they do to files.
 
 **Irreversibility is a property of the control, not the coordinates.**
 Whether clicking (900, 412) is recoverable depends on whether that pixel
@@ -35,14 +37,24 @@ Drivers:
     KIMIYA_SCREEN=none      record the act, deliver nothing
 
 `KIMIYA_MOCK=1` implies `none`, so the test suite never touches the
-developer's real cursor.
+developer's real cursor. Under `none`, `observe screen(...)` serves
+`KIMIYA_SCREEN_FIXTURE` if one is set and otherwise reports
+`exists: false` — it never fabricates a screenshot that was not taken.
+
+**A multi-monitor X screen is a bounding box, not a union.** Observing a
+named monitor (`observe screen("eDP-1")`) records that monitor's origin
+on the record, so coordinates found inside the capture can be mapped
+back to absolute screen coordinates before a click is delivered.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
+import struct
 import subprocess
+from pathlib import Path
 
 # action -> arity. `confirm` is a click; it differs only in effect class.
 ACTIONS: dict[str, int] = {
@@ -206,3 +218,149 @@ def perform(action: str, args: list) -> dict:
 def _trace_arg(a):
     s = str(a)
     return s if len(s) <= TRACE_TEXT_LIMIT else s[:TRACE_TEXT_LIMIT] + "…"
+
+
+# ---------------------------------------------------------------- capture
+
+# Region grabbers, best first. Each entry maps a region to an argv.
+CAPTURE_TOOLS = [
+    ("maim", lambda p, r: ["maim", "-g", _geom(r), str(p)] if r
+     else ["maim", str(p)]),
+    ("import", lambda p, r: (
+        ["import", "-window", "root", "-crop", _geom(r), "+repage",
+         f"png:{p}"] if r else ["import", "-window", "root", f"png:{p}"])),
+    ("scrot", lambda p, r: (
+        ["scrot", "-o", "-a", ",".join(str(v) for v in r), str(p)] if r
+        else ["scrot", "-o", str(p)])),
+    ("gnome-screenshot", lambda p, r: ["gnome-screenshot", "-f", str(p)]),
+]
+
+
+def _geom(region) -> str:
+    x, y, w, h = region
+    return f"{w}x{h}+{x}+{y}"
+
+
+def monitors() -> dict[str, tuple[int, int, int, int]]:
+    """Connected outputs as name -> (x, y, w, h), from xrandr."""
+    if not shutil.which("xrandr"):
+        return {}
+    try:
+        out = subprocess.run(["xrandr", "--listmonitors"], check=True,
+                             capture_output=True, text=True,
+                             timeout=10).stdout
+    except (subprocess.SubprocessError, OSError):
+        return {}
+    found: dict[str, tuple[int, int, int, int]] = {}
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        name = parts[-1]
+        # e.g.  1920/302x1200/189+0+561
+        geom = parts[-2]
+        try:
+            wh, x, y = geom.split("+")
+            w, hgt = wh.split("x")
+            found[name] = (int(x), int(y),
+                           int(w.split("/")[0]), int(hgt.split("/")[0]))
+        except ValueError:
+            continue
+    return found
+
+
+def png_size(path) -> tuple[int, int]:
+    """Width and height from a PNG IHDR — no image library needed."""
+    with open(path, "rb") as f:
+        head = f.read(24)
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n":
+        return (0, 0)
+    return struct.unpack(">II", head[16:24])
+
+
+def _resolve_region(args: list) -> tuple[tuple | None, str]:
+    """(region, label) from the `observe screen(...)` arguments."""
+    if not args:
+        return None, "root"
+    if len(args) == 1:
+        name = str(args[0])
+        mons = monitors()
+        if name in mons:
+            return mons[name], name
+        raise ScreenError(
+            f"no monitor named {name!r} — connected: "
+            f"{', '.join(sorted(mons)) or 'none detected'}")
+    if len(args) == 4:
+        x, y, w, h = (_num(a, "observe", i) for i, a in enumerate(args))
+        if w <= 0 or h <= 0:
+            raise ScreenError(
+                f"observe screen: width and height must be positive "
+                f"(got {w}x{h})")
+        return (x, y, w, h), f"{w}x{h}+{x}+{y}"
+    raise ScreenError(
+        "observe screen takes no arguments (whole screen), one monitor "
+        "name, or four numbers (x, y, w, h)")
+
+
+def capture(args: list, dest_dir) -> dict:
+    """Take a screenshot. Returns the observation record.
+
+    `x`/`y` carry the capture origin so a coordinate found inside the
+    image can be mapped back to an absolute screen coordinate — the
+    difference matters the moment a second monitor exists.
+    """
+    region, label = _resolve_region(args)
+    x, y = (region[0], region[1]) if region else (0, 0)
+    base = {"kind": "screen", "display": display(), "region": label,
+            "x": x, "y": y, "width": 0, "height": 0,
+            "path": "", "sha": "", "exists": False, "driver": driver_name()}
+
+    if driver_name() == "none":
+        fixture = os.environ.get("KIMIYA_SCREEN_FIXTURE")
+        if not fixture:
+            # No screenshot was taken; say so rather than invent one.
+            return base
+        path = Path(fixture)
+        if not path.exists():
+            raise ScreenError(f"KIMIYA_SCREEN_FIXTURE={fixture} does not "
+                              "exist")
+        return _finish(base, path)
+
+    tool = next((t for t in CAPTURE_TOOLS if shutil.which(t[0])), None)
+    if tool is None:
+        raise ScreenError(
+            "no screenshot tool found — install one of "
+            f"{', '.join(t[0] for t in CAPTURE_TOOLS)}. Set "
+            "KIMIYA_SCREEN=none with KIMIYA_SCREEN_FIXTURE=<png> to run "
+            "against a recorded screenshot instead.")
+    name, build = tool
+    if name == "gnome-screenshot" and region:
+        raise ScreenError(
+            "gnome-screenshot cannot capture a region; install maim, "
+            "import (ImageMagick) or scrot for region capture")
+    if not os.environ.get("DISPLAY"):
+        raise ScreenError("DISPLAY is unset — no X display to capture")
+
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / f"shot-{label.replace('/', '_')}.png"
+    try:
+        subprocess.run(build(path, region), check=True,
+                       capture_output=True, timeout=30)
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.decode(errors="replace").strip()
+        raise ScreenError(f"{name} failed: {err or e}") from None
+    except subprocess.TimeoutExpired:
+        raise ScreenError(f"{name} timed out") from None
+    if not path.exists():
+        raise ScreenError(f"{name} produced no file at {path}")
+    base["driver"] = name
+    return _finish(base, path)
+
+
+def _finish(rec: dict, path) -> dict:
+    w, h = png_size(path)
+    rec.update({"path": str(path), "exists": True, "width": w, "height": h,
+                "sha": hashlib.sha256(
+                    Path(path).read_bytes()).hexdigest()[:12]})
+    return rec

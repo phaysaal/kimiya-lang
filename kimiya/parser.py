@@ -117,7 +117,10 @@ class Parser:
                     break
                 key = self.expect("NAME").value
                 self.expect("OP", "=")
-                afields[key] = self.expect("STRING").value
+                if self.at_kw("true") or self.at_kw("false"):
+                    afields[key] = self.next().value == "true"
+                else:
+                    afields[key] = self.expect("STRING").value
                 self.expect("NEWLINE")
             self.expect("DEDENT")
             return A.AgentDecl(name, afields, t.line)
@@ -371,7 +374,11 @@ class Parser:
             if self.at_kw("under"):
                 self.next()
                 ctx = self.expect("NAME").value
-            return A.SelectExpr(recall, query, store, ctx, t.line)
+            by = None
+            if self.at_kw("by"):     # the instrument, for a vision select
+                self.next()
+                by = self.expect("NAME").value
+            return A.SelectExpr(recall, query, store, ctx, by, t.line)
         if self.at_kw("observe"):
             self.next()
             surface = self.expect("NAME").value
@@ -399,10 +406,22 @@ class Parser:
                 self.next()
                 tau = num / float(self.expect("NUMBER").value)
             self.expect("OP", ">")
-            self.expect("OP", "(")
+            # The relation may be parenthesised — `judge<5,4/5> (a |= b)` —
+            # or not, as `shows(shot, "…")` reads better bare.
+            wrapped = self.at("OP", "(")
+            if wrapped:
+                self.next()
             left = self.expr()
             relation, right = "rubric", None
-            if self.at("OP", "|="):
+            # shows(screenshot, "…") — a relation whose left side is an
+            # image, written as a call so no new keyword is needed.
+            if isinstance(left, A.Call) and left.func == "shows":
+                if len(left.args) != 2:
+                    raise ParseError(
+                        f"line {t.line}: shows takes 2 arguments "
+                        f"(a screenshot and a claim), got {len(left.args)}")
+                relation, right, left = "shows", left.args[1], left.args[0]
+            elif self.at("OP", "|="):
                 self.next()
                 relation, right = "entails", self.expr()
             elif self.at("OP", "~"):
@@ -411,7 +430,8 @@ class Parser:
             elif self.at_kw("contradicts"):
                 self.next()
                 relation, right = "contradicts", self.expr()
-            self.expect("OP", ")")
+            if wrapped:
+                self.expect("OP", ")")
             self.expect_kw("under")
             ctx = self.expect("NAME").value
             panel = None

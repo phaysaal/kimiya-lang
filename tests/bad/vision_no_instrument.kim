@@ -1,0 +1,11 @@
+-- K10: a select over a screenshot is a model reading an image, so the
+-- certificate must name what read it.
+pool A = "llama3.1:8b"
+
+context k_ui:
+    domain     = "GUI control matching a description on a screenshot"
+    preserve   = [role, visible_label]
+    allow_loss = [theme]
+
+shot := observe screen("eDP-1")
+hits := select<0.97>("the Create Group button", shot) under k_ui
