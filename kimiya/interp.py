@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -66,12 +67,15 @@ class Interp:
     def __init__(self, prog: A.Program, program_path: Path,
                  models_override: list[str] | None = None,
                  py_funcs: dict | None = None,
-                 py_exts: list | None = None):
+                 py_exts: list | None = None,
+                 replay: bool = False):
         self.prog = prog
         self.workspace = program_path.parent / ".kimiya"
         self.workspace.mkdir(exist_ok=True)
         self.trace = Trace(self.workspace)
         self.sheets = Datasheets(self.workspace)
+        self.locate_cache = vision.LocateCache(self.workspace)
+        self.replay = replay or os.environ.get("KIMIYA_REPLAY") == "1"
         self.oracle = get_oracle()
         self.env: dict[str, object] = {}
         self.contexts = {d.name: d for d in prog.decls
@@ -107,6 +111,8 @@ class Interp:
         self.last_obs: dict[str, float] = {}
         self.screen_acts = 0
         self.locates = 0
+        self.locates_cached = 0      # exact-sha hits: same image, free
+        self.locates_replayed = 0    # replay hits: pixels changed, disclosed
         self.overclaims: list[str] = []
         self.committed = None
 
@@ -162,7 +168,9 @@ class Interp:
             "screen": ({"driver": screen.driver_name(),
                         "target": screen.target(),
                         "acts": self.screen_acts,
-                        "locates": self.locates}
+                        "locates": self.locates,
+                        "locates_cached": self.locates_cached,
+                        "locates_replayed": self.locates_replayed}
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
             "cost": dict(self.cost, seconds=round(secs, 1)),
@@ -277,11 +285,20 @@ class Interp:
         agent = (self.pool.agent(sel.by) if sel.by
                  else self.pool.default_generator())
         query = self.to_str(self.eval(sel.query))
-        hits = vision.locate(self.oracle, agent, self.trace, shot, query,
-                             self.purpose_text(sel.context), sel.context)
+        try:
+            hits, source = vision.locate(
+                self.oracle, agent, self.trace, shot, query,
+                self.purpose_text(sel.context), sel.context,
+                cache=self.locate_cache, replay=self.replay)
+        except vision.ReplayMiss as e:
+            raise Bolt(f"select at line {sel.line}: {e}") from None
         task = vision.locate_task(sel.context)
         sheet = self.sheets.get(task)
         self.locates += 1
+        if source == "exact":
+            self.locates_cached += 1
+        elif source == "replay":
+            self.locates_replayed += 1
         if hits:
             self.theta.append((task, sheet["beta_lo"]))
         else:

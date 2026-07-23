@@ -151,6 +151,54 @@ grep -q "via claude CLI" <<<"$cout" \
 grep -q "screenshots leave the machine" <<<"$cout" \
   || { echo "FAIL: screenshot egress not announced"; echo "$cout"; exit 1; }
 
+echo "== locate cache: exact hits, replay, and replay-miss =="
+FIXTURE2="$OLDPWD_REPO/tests/fixtures/screen2.png"
+# The earlier runs populated the cache; this same-fixture run must be
+# served entirely from exact-sha hits.
+eout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+       python3 -m kimiya run gui_collab.kim)
+grep -q "4 exact-cache" <<<"$eout" \
+  || { echo "FAIL: exact-sha cache not hit"; echo "$eout"; exit 1; }
+grep -q "replayed" <<<"$eout" \
+  && { echo "FAIL: exact hits mislabeled as replays"; exit 1; }
+# Different pixels + no replay flag: locates run live again. One
+# exact-cache hit remains legitimate — the program locates "the + button
+# by the groups heading" twice and both captures serve identical bytes,
+# so the second is a reading of the same image within the same run.
+lout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE2" \
+       python3 -m kimiya run gui_collab.kim)
+grep -q "replayed" <<<"$lout" \
+  && { echo "FAIL: changed pixels replayed without --replay"; exit 1; }
+grep -q "4 exact-cache" <<<"$lout" \
+  && { echo "FAIL: changed pixels served from cache without --replay"; exit 1; }
+grep -q "(1 exact-cache)" <<<"$lout" \
+  || { echo "FAIL: intra-run duplicate locate not deduped"; echo "$lout"; exit 1; }
+# The cache now holds screen2 readings; replaying against screen.png is
+# the stale case: served from cache, counted, and disclosed.
+rout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+       python3 -m kimiya run gui_collab.kim --replay)
+grep -q "COMMITTED" <<<"$rout" || { echo "FAIL: replay run"; echo "$rout"; exit 1; }
+grep -q "4 replayed" <<<"$rout" \
+  || { echo "FAIL: replays not counted"; echo "$rout"; exit 1; }
+grep -q "layout stability is assumed" <<<"$rout" \
+  || { echo "FAIL: replay not disclosed"; echo "$rout"; exit 1; }
+# Replay against an empty cache must abstain, not invent coordinates.
+rm .kimiya/locates.json
+mout2=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+        python3 -m kimiya run gui_collab.kim --replay || true)
+grep -q "ABSTAINED" <<<"$mout2" \
+  || { echo "FAIL: replay miss did not abstain"; echo "$mout2"; exit 1; }
+grep -q "no cached locate" <<<"$mout2" \
+  || { echo "FAIL: replay-miss reason not stated"; echo "$mout2"; exit 1; }
+# Compiled artifact honors KIMIYA_REPLAY: repopulate live, then replay.
+KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+  python3 -m kimiya run gui_collab.kim > /dev/null
+KIMIYA_MOCK=1 python3 -m kimiya compile gui_collab.kim --out gcr.py >/dev/null
+crout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE2" \
+        KIMIYA_REPLAY=1 python3 gcr.py)
+grep -q "4 replayed" <<<"$crout" \
+  || { echo "FAIL: compiled replay"; echo "$crout"; exit 1; }
+
 echo "== observe screen: no fixture, no invented screenshot =="
 nout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none python3 -m kimiya run gui_collab.kim || true)
 grep -q "ABSTAINED" <<<"$nout" \

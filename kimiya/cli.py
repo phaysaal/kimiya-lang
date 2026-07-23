@@ -146,7 +146,11 @@ def cmd_run(args):
         sys.exit("refusing to run an ill-formed program")
     models = args.models.split(",") if args.models else None
     interp = Interp(prog, Path(args.file), models,
-                    py_funcs=py_funcs, py_exts=py_exts)
+                    py_funcs=py_funcs, py_exts=py_exts,
+                    replay=getattr(args, "replay", False))
+    if interp.replay:
+        print("▶ replay: cached locates will be reused without a model "
+              "call; judges and kernel gates still run live")
     remote = [a for a in interp.pool.agents if not a.is_local]
     if remote:
         print("⚠ network egress: this program sends prompts to remote "
@@ -187,9 +191,23 @@ def cmd_run(args):
         print("  egress : none (all agents local)")
     if cert.get("screen"):
         sc = cert["screen"]
-        print(f"  screen : {sc['acts']} act(s) via {sc['driver']} "
-              f"on {sc['target']}"
-              + (f", {sc['locates']} locate(s)" if sc.get("locates") else ""))
+        line = (f"  screen : {sc['acts']} act(s) via {sc['driver']} "
+                f"on {sc['target']}")
+        if sc.get("locates"):
+            line += f", {sc['locates']} locate(s)"
+            extras = []
+            if sc.get("locates_cached"):
+                extras.append(f"{sc['locates_cached']} exact-cache")
+            if sc.get("locates_replayed"):
+                extras.append(f"{sc['locates_replayed']} replayed")
+            if extras:
+                line += f" ({', '.join(extras)})"
+        print(line)
+        if sc.get("locates_replayed"):
+            print(f"  ⚠ {sc['locates_replayed']} locate(s) replayed from a "
+                  "prior run against changed pixels — layout stability is "
+                  "assumed, not measured; the verdict gates (checks, "
+                  "judges) still ran live")
     for note in cert.get("overclaims", []):
         print(f"  ⚠ {note}")
     c = cert["cost"]
@@ -331,6 +349,10 @@ def main(argv=None):
     rp.add_argument("file")
     rp.add_argument("--models", help="comma-separated ollama models "
                     "(overrides pool declarations)")
+    rp.add_argument("--replay", action="store_true",
+                    help="reuse cached locates even though the screen has "
+                    "changed (zero locate model calls; judges still run "
+                    "live). Compiled artifacts: KIMIYA_REPLAY=1")
     kp = sub.add_parser("compile")
     kp.add_argument("file")
     kp.add_argument("--out", help="output .py path (default: FILE.py)")

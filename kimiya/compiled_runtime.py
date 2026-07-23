@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -34,6 +35,8 @@ class Runtime:
         self.workspace.mkdir(exist_ok=True)
         self.trace = Trace(self.workspace)
         self.sheets = Datasheets(self.workspace)
+        self.locate_cache = vision.LocateCache(self.workspace)
+        self.replay = os.environ.get("KIMIYA_REPLAY") == "1"
         self.oracle = get_oracle()
         self.contexts = contexts        # name -> purpose text
         self.schemas = schemas          # name -> [field, ...]
@@ -57,6 +60,8 @@ class Runtime:
         self.uncertified = 0
         self.screen_acts = 0
         self.locates = 0
+        self.locates_cached = 0
+        self.locates_replayed = 0
         self.overclaims = []
         self.last_gen: Agent | None = None
         self.committed = None
@@ -102,11 +107,19 @@ class Runtime:
         agent = (self.pool.agent(by) if by
                  else self.pool.default_generator())
         purpose = self.contexts.get(ctx, ctx or "unscoped")
-        hits = vision.locate(self.oracle, agent, self.trace, shot,
-                             _to_str(query), purpose, ctx)
+        try:
+            hits, source = vision.locate(
+                self.oracle, agent, self.trace, shot, _to_str(query),
+                purpose, ctx, cache=self.locate_cache, replay=self.replay)
+        except vision.ReplayMiss as e:
+            raise Bolt(f"select: {e}") from None
         task = vision.locate_task(ctx)
         sheet = self.sheets.get(task)
         self.locates += 1
+        if source == "exact":
+            self.locates_cached += 1
+        elif source == "replay":
+            self.locates_replayed += 1
         self.theta.append((task if hits else f"neg:{task}",
                            sheet["beta_lo"] if hits
                            else 1 - sheet["alpha_hi"]))
@@ -315,7 +328,9 @@ class Runtime:
             "screen": ({"driver": screen.driver_name(),
                         "target": screen.target(),
                         "acts": self.screen_acts,
-                        "locates": self.locates}
+                        "locates": self.locates,
+                        "locates_cached": self.locates_cached,
+                        "locates_replayed": self.locates_replayed}
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
             "cost": dict(self.cost), "trace_records": self.trace.count(),
@@ -337,10 +352,23 @@ class Runtime:
             print("  egress : none (all agents local)")
         if cert["screen"]:
             sc = cert["screen"]
-            print(f"  screen : {sc['acts']} act(s) via {sc['driver']} "
-                  f"on {sc['target']}"
-                  + (f", {sc['locates']} locate(s)" if sc.get("locates")
-                     else ""))
+            line = (f"  screen : {sc['acts']} act(s) via {sc['driver']} "
+                    f"on {sc['target']}")
+            if sc.get("locates"):
+                line += f", {sc['locates']} locate(s)"
+                extras = []
+                if sc.get("locates_cached"):
+                    extras.append(f"{sc['locates_cached']} exact-cache")
+                if sc.get("locates_replayed"):
+                    extras.append(f"{sc['locates_replayed']} replayed")
+                if extras:
+                    line += f" ({', '.join(extras)})"
+            print(line)
+            if sc.get("locates_replayed"):
+                print(f"  ⚠ {sc['locates_replayed']} locate(s) replayed "
+                      "from a prior run against changed pixels — layout "
+                      "stability is assumed, not measured; the verdict "
+                      "gates (checks, judges) still ran live")
         for note in cert["overclaims"]:
             print(f"  ⚠ {note}")
         c = cert["cost"]

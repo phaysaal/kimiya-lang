@@ -25,12 +25,33 @@ image; they are mapped through the capture's origin so a click lands
 where the control actually is. On a multi-monitor layout the capture
 origin is not (0, 0), and getting this wrong is a click in the wrong
 window, not a visible error.
+
+**Locates are cached; the cache has two grades.** Every live locate is
+stored in the workspace keyed by (task, capture size, description).
+
+  * An **exact** hit — the current screenshot's SHA matches the cached
+    one — is a reading of this very image. Byte-identical pixels,
+    identical answer; it re-enters θ at the datasheet rate with nothing
+    to disclose.
+
+  * A **replay** hit (`--replay` / `KIMIYA_REPLAY=1`) reuses the cached
+    boxes although the pixels have changed. That is the GUI-harness
+    trick that makes reruns free — and it is sound only because the
+    locate never carries the verdict: a stale coordinate produces a
+    wrong click, the world diverges, and the *live* gates (kernel
+    checks, `shows` judges — never cached) refuse to commit. The
+    certificate counts replays and says the assumption out loud.
+
+Judgments are never cached: a `shows` is a claim about the current
+state of the world, and yesterday's screen is not evidence about today's.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import time
+from pathlib import Path
 
 LOCATE_SYSTEM = (
     "You LOCATE user-interface controls in a screenshot. Return ONLY a "
@@ -70,6 +91,51 @@ LOCATE_SCHEMA = {
 def locate_task(context: str | None) -> str:
     """Datasheet key for this instrument, mirroring `entails:<ctx>`."""
     return f"locate:{context or 'unscoped'}"
+
+
+class ReplayMiss(Exception):
+    """Replay mode was asked for a locate that was never run live."""
+
+
+class LocateCache:
+    """Past locate readings, keyed by (task, capture size, description).
+
+    Stores the parsed image-pixel boxes rather than absolute screen
+    coordinates, so a cached control maps correctly even if the monitor
+    has moved within the X screen since the live run.
+
+    Only non-empty results are cached — a miss may be transient (a
+    dialog mid-animation), and caching it would replay the failure
+    forever.
+    """
+
+    def __init__(self, workspace):
+        self.path = Path(workspace) / "locates.json"
+        self._d: dict = {}
+        if self.path.exists():
+            try:
+                self._d = json.loads(self.path.read_text())
+            except (json.JSONDecodeError, OSError):
+                self._d = {}
+
+    @staticmethod
+    def key(task: str, shot: dict, description: str) -> str:
+        return (f"{task}|{shot.get('width')}x{shot.get('height')}"
+                f"|{description}")
+
+    def get(self, task: str, shot: dict, description: str) -> dict | None:
+        return self._d.get(self.key(task, shot, description))
+
+    def put(self, task: str, shot: dict, description: str,
+            parsed: list, agent_label: str):
+        self._d[self.key(task, shot, description)] = {
+            "boxes": [{"box": list(p["box"]), "label": p["label"],
+                       "confidence": p["confidence"]} for p in parsed],
+            "sha": shot.get("sha", ""),
+            "agent": agent_label,
+            "ts": time.time(),
+        }
+        self.path.write_text(json.dumps(self._d, indent=2))
 
 
 def _parse_boxes(text: str) -> list[dict]:
@@ -137,14 +203,59 @@ def _to_pixels(box, shot: dict) -> dict:
     }
 
 
+def _build_hits(parsed: list, shot: dict) -> list[dict]:
+    hits = []
+    for p in parsed:
+        rec = _to_pixels(p["box"], shot)
+        rec["label"] = p["label"]
+        rec["confidence"] = p["confidence"]
+        hits.append(rec)
+    hits.sort(key=lambda r: -r["confidence"])
+    return hits
+
+
 def locate(oracle, agent, trace, shot: dict, description: str,
-           purpose: str, context: str | None) -> list[dict]:
-    """Find controls matching `description` in `shot`. Best first."""
+           purpose: str, context: str | None,
+           cache: LocateCache | None = None,
+           replay: bool = False) -> tuple[list[dict], str]:
+    """Find controls matching `description` in `shot`. Best first.
+
+    Returns (hits, source) where source is one of:
+      "live"    — the model read this screenshot
+      "exact"   — cache hit, screenshot bytes identical to the live run
+      "replay"  — cache hit under replay mode, pixels have changed
+    """
+    task = locate_task(context)
+    ent = cache.get(task, shot, description) if cache else None
+
+    source = None
+    if ent and ent.get("sha") and ent["sha"] == shot.get("sha"):
+        source = "exact"          # same image, same reading — free
+    elif replay:
+        if ent is None:
+            raise ReplayMiss(
+                f"no cached locate for {description!r} at "
+                f"{shot.get('width')}x{shot.get('height')} — run live "
+                "once before replaying")
+        source = "replay"         # layout-stability assumption, disclosed
+
+    if source:
+        assert ent is not None
+        parsed = [{"box": tuple(b["box"]), "label": b["label"],
+                   "confidence": b["confidence"]} for b in ent["boxes"]]
+        hits = _build_hits(parsed, shot)
+        trace.append({"kind": "locate", "task": task, "cache": source,
+                      "description": description[:200],
+                      "screenshot_sha": shot.get("sha", ""),
+                      "cached_sha": ent.get("sha", ""),
+                      "capture_origin": [shot.get("x"), shot.get("y")],
+                      "agent": ent.get("agent", "cached"), "hits": hits})
+        return hits, source
+
     w, h = shot.get("width") or 0, shot.get("height") or 0
     prompt = (f"PURPOSE: {purpose}\n\n"
               f"The screenshot is {w}x{h} pixels.\n"
               f"Locate in it: {description}")
-    task = locate_task(context)
     try:
         out = oracle.complete(agent, prompt, system=LOCATE_SYSTEM,
                               temperature=0.0, max_tokens=2048,
@@ -153,14 +264,10 @@ def locate(oracle, agent, trace, shot: dict, description: str,
     except (OSError, RuntimeError) as e:
         out, err = "", str(e)[:200]
     parsed = _parse_boxes(out)
-    hits = []
-    for p in parsed:
-        rec = _to_pixels(p["box"], shot)
-        rec["label"] = p["label"]
-        rec["confidence"] = p["confidence"]
-        hits.append(rec)
-    hits.sort(key=lambda r: -r["confidence"])
-    trace.append({"kind": "locate", "task": task,
+    hits = _build_hits(parsed, shot)
+    if cache and parsed and not err:
+        cache.put(task, shot, description, parsed, agent.label())
+    trace.append({"kind": "locate", "task": task, "cache": "live",
                   "description": description[:200],
                   "screenshot": shot.get("path", ""),
                   "screenshot_sha": shot.get("sha", ""),
@@ -168,4 +275,4 @@ def locate(oracle, agent, trace, shot: dict, description: str,
                   "capture_size": [shot.get("width"), shot.get("height")],
                   "agent": agent.label(), "hits": hits,
                   **({"error": err} if err else {})})
-    return hits
+    return hits, "live"

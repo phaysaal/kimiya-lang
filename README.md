@@ -417,6 +417,40 @@ what says so. See `examples/gui_collab.kim` — a two-user collaboration
 test (create a group, carry the join code, verify the chat) where the two
 actors are two monitors of one X screen.
 
+### Replay: cached locates
+
+Every live locate is stored in `.kimiya/locates.json`, keyed by (task,
+capture size, description). The cache has two grades, and the difference
+is epistemic, not mechanical:
+
+- An **exact** hit — the current screenshot's SHA matches the cached
+  one — is a reading of this very image. Byte-identical pixels,
+  identical answer; it is free, silent, and enters θ at the datasheet
+  rate. Always on.
+- A **replay** hit (`kimiya run prog.kim --replay`, or `KIMIYA_REPLAY=1`
+  for compiled artifacts) reuses cached boxes although the pixels have
+  changed. Zero locate model calls; a scenario that took minutes reruns
+  in seconds.
+
+Replay is sound *only because the locate never carries the verdict*: a
+stale coordinate produces a wrong click, the world diverges, and the
+live gates — kernel checks and `shows` judges, which are **never**
+cached — refuse to commit. The certificate counts replays and says the
+assumption out loud:
+
+```
+  screen : 8 act(s) via none on screen::0, 4 locate(s) (4 replayed)
+  ⚠ 4 locate(s) replayed from a prior run against changed pixels —
+    layout stability is assumed, not measured; the verdict gates
+    (checks, judges) still ran live
+```
+
+Replay against a cache that has no entry for a description **abstains**
+rather than inventing coordinates — run live once first. Judgments are
+never cached under either mode: a `shows` is a claim about the current
+state of the world, and yesterday's screen is not evidence about
+today's.
+
 ### Driving a GUI
 
 **Do not smuggle clicks through a Python extension.** `pyfn click =
@@ -591,9 +625,14 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
   answers in normalized 0–1000 coordinates will be misread — there is no
   unit sniffing.
 - `claude_cli` latency is ~6–15s per call (p50 ≈ 9s in the harness
-  campaign), so a scenario with a dozen locates takes minutes. There is
-  no coordinate cache in the language yet — every run pays for every
-  locate.
+  campaign), so a *first* run of a scenario with a dozen locates takes
+  minutes. Later runs hit the locate cache: free when the screen is
+  byte-identical, free-and-disclosed under `--replay` when it isn't.
+- The locate cache keys on capture size, not on app version or theme —
+  replaying after a UI redesign reuses coordinates for a layout that no
+  longer exists. The gates catch the divergence (the run abstains), but
+  the cache won't warn you first; delete `.kimiya/locates.json` after
+  UI changes.
 - `screen.type` text is echoed into the trace (truncated at 200 chars)
   because that is what makes a run auditable — so do not type secrets;
   there is no `key_env` indirection for typed input yet.
