@@ -4,11 +4,12 @@
 -- creates a group, the join code is carried to user B, and the chat is
 -- verified in both directions. Here it runs.
 --
--- The two actors are two monitors of one X screen. That is not a
--- workaround — it is how a two-user GUI test is actually staged, and it
--- is why `observe screen(<monitor>)` records the capture origin: boxes
--- found inside B's capture come back as absolute coordinates, so a click
--- meant for B cannot land on A.
+-- The two actors are declared displays. Here they are staged as two
+-- monitors of one X screen — so they share one pointer, and the actor
+-- names label intent rather than independence. Point B at another X
+-- server (x11 = ":1") or another machine (ssh = "user@host") and the
+-- same program drives two genuinely independent seats; the certificate
+-- reports where each actor resolved either way.
 --
 -- The locator runs Opus 4.8 through the `claude` CLI — the same path the
 -- seenslide GUI harness measured its datasheet through, which is why an
@@ -32,6 +33,12 @@ agent J2:                         -- judge, family: google  (J ⋪ C)
 
 use python "collabdb.py"
 
+display A:
+    monitor = "eDP-1"
+
+display B:
+    monitor = "DP-1"
+
 context k_ui:                     -- locating a described control
     domain     = "GUI control matching a description on a screenshot"
     preserve   = [role, visible_label, affordance]
@@ -43,25 +50,25 @@ context k_state:                  -- judging an application state
     allow_loss = [cursor, clock, theme, unrelated_windows]
 
 -- ---------------------------------------------------------------- A
-a := observe screen("eDP-1")
+a := observe screen<A>()
 check a.exists
 
 hits := select<0.97>("the + button by the groups heading", a) under k_ui by L
 plus := first(hits)
-act screen.click(plus.x, plus.y)
+act<A> screen.click(plus.x, plus.y)
 
-a2 := observe screen("eDP-1")
+a2 := observe screen<A>()
 chits := select<0.97>("the Create Group button", a2) under k_ui by L
 create := first(chits)
-act screen.click(create.x, create.y)
-act screen.type("W3 Harness Group")
-act screen.key("Return")
+act<A> screen.click(create.x, create.y)
+act<A> screen.type("W3 Harness Group")
+act<A> screen.key("Return")
 
 -- Settle on non-visual ground truth, not on a picture: the row either
 -- exists or it does not, at certainty 1.
-settle until check group_exists("W3 Harness Group") within 12
+settle<A> until check group_exists("W3 Harness Group") within 12
 
-a3 := observe screen("eDP-1")
+a3 := observe screen<A>()
 if judge<3,2/3> shows(a3, "a success view with an 8-character join code") under k_state panel [J1, J2]:
     print "A: group created"
 else:
@@ -72,28 +79,28 @@ code := join_code("W3 Harness Group")
 check len(code) == 8
 
 -- ---------------------------------------------------------------- B
-b := observe screen("DP-1")
+b := observe screen<B>()
 check b.exists
 
 bhits := select<0.97>("the + button by the groups heading", b) under k_ui by L
 bplus := first(bhits)
-act screen.click(bplus.x, bplus.y)
+act<B> screen.click(bplus.x, bplus.y)
 
-b2 := observe screen("DP-1")
+b2 := observe screen<B>()
 fhits := select<0.97>("the Join Code input", b2) under k_ui by L
 field := first(fhits)
-act screen.click(field.x, field.y)
-act screen.type(code)
-act screen.key("Return")
+act<B> screen.click(field.x, field.y)
+act<B> screen.type(code)
+act<B> screen.key("Return")
 
-settle until check member_count("W3 Harness Group") == 2 within 12
+settle<B> until check member_count("W3 Harness Group") == 2 within 12
 
 -- ------------------------------------------------------------ verdict
 -- Two gates. The kernel gate contributes no instrument error: any run
 -- that commits satisfies it with certainty. The judged gate is an
 -- instrument reading, and θ carries it at the locator's measured rate,
 -- not at 1.
-b3 := observe screen("DP-1")
+b3 := observe screen<B>()
 if check(member_count("W3 Harness Group") == 2 and message_count("W3 Harness Group") == 2):
     if judge<3,2/3> shows(b3, "the chat pane displays the message sent by A") under k_state panel [J1, J2]:
         commit("W3 collaboration verified")

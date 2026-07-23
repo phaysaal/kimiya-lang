@@ -24,7 +24,7 @@
     },
     {
       "name": "keyword.control.world.kimiya",
-      "match": "\\b(act|observe|settle|within|inv|compensate)\\b"
+      "match": "\\b(act|observe|settle|within|inv|compensate|display)\\b"
     },
     {
       "name": "keyword.control.kimiya",

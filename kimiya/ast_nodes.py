@@ -69,8 +69,9 @@ class UnOp:
 
 @dataclass
 class ObserveExpr:
-    surface: str          # "file"
+    surface: str          # "file" | "screen"
     args: list
+    actor: str | None = None   # `observe screen<A>(...)` — a declared display
     line: int = 0
 
 
@@ -101,6 +102,13 @@ class JudgeGuard:
 class PoolDecl:
     name: str
     model: str
+    line: int = 0
+
+
+@dataclass
+class DisplayDecl:
+    name: str
+    fields: dict          # x11, ssh, monitor
     line: int = 0
 
 
@@ -216,6 +224,7 @@ class ActStmt:
     surface: str
     action: str
     args: list
+    actor: str | None = None    # `act<A> screen...` — a declared display
     line: int = 0
     gated_by_if: bool = False   # set by the checker's verified-gate pass
 
@@ -224,6 +233,7 @@ class ActStmt:
 class SettleStmt:
     guard: object
     within: float
+    actor: str | None = None    # `settle<A> ...` — whose world settled
     line: int = 0
 
 

@@ -38,6 +38,8 @@ declare -A want=(
   [blind_shows_panel]="would vote on a screenshot they never saw"
   [shows_not_screenshot]="takes a screenshot as its first argument"
   [blind_claude_url]="unknown backend"
+  [undeclared_actor]="not a declared display"
+  [actor_on_file]="screen surface only"
 )
 for name in "${!want[@]}"; do
   out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)
@@ -198,6 +200,32 @@ crout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE2" \
         KIMIYA_REPLAY=1 python3 gcr.py)
 grep -q "4 replayed" <<<"$crout" \
   || { echo "FAIL: compiled replay"; echo "$crout"; exit 1; }
+
+echo "== actors: per-seat fixtures, certificate table =="
+# Two declared displays, each served by its own recording: actor A
+# sees fixture 1, actor B sees fixture 2, and the trace must show the
+# two seats reading different images.
+rm -f .kimiya/locates.json .kimiya/trace.jsonl
+aout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none \
+       KIMIYA_SCREEN_FIXTURE_A="$FIXTURE" \
+       KIMIYA_SCREEN_FIXTURE_B="$FIXTURE2" \
+       python3 -m kimiya run gui_collab.kim)
+grep -q "COMMITTED" <<<"$aout" || { echo "FAIL: actor run"; echo "$aout"; exit 1; }
+grep -q "actor  : A →" <<<"$aout" \
+  || { echo "FAIL: actor A missing from certificate"; echo "$aout"; exit 1; }
+grep -q "actor  : B →" <<<"$aout" \
+  || { echo "FAIL: actor B missing from certificate"; echo "$aout"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: per-actor fixtures"; exit 1; }
+import json
+recs = [json.loads(l) for l in open(".kimiya/trace.jsonl")]
+obs = [r for r in recs if r.get("kind") == "observe"
+       and r.get("surface") == "screen"]
+shas = {r["actor"]: r["sha"] for r in obs}
+assert set(shas) == {"A", "B"}, shas
+assert shas["A"] != shas["B"], "actors served the same fixture"
+acts = [r for r in recs if r.get("kind") == "act"]
+assert {a.get("actor") for a in acts} == {"A", "B"}, acts
+PY
 
 echo "== observe screen: no fixture, no invented screenshot =="
 nout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none python3 -m kimiya run gui_collab.kim || true)

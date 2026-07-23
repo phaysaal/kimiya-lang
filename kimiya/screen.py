@@ -51,9 +51,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import shutil
 import struct
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 # action -> arity. `confirm` is a click; it differs only in effect class.
@@ -97,6 +99,69 @@ def target() -> str:
     return "screen:" + display()
 
 
+@dataclass
+class Display:
+    """One seat: a display where a screen exists and input can land.
+
+    An actor index (`act<A>`, `observe screen<A>(...)`) resolves to one
+    of these. Three shapes:
+
+      local, ambient   x11=None            → the env DISPLAY
+      local, explicit  x11=":1"            → another X server on this box
+      remote           ssh="user@host"     → xdotool + capture run over
+                                             ssh; screenshots stream back
+
+    Two actors on distinct X servers are genuinely independent seats.
+    Two actors that resolve to the same X server share one pointer and
+    one keyboard focus — the actor names then label intent, not
+    independence, and interleaving their acts can interfere. The
+    certificate reports where each actor resolved so a reviewer can see
+    which situation a run was in.
+    """
+
+    name: str = "default"
+    x11: str | None = None
+    ssh: str | None = None
+    monitor: str | None = None    # default capture region, by xrandr name
+
+    @property
+    def resolved_x11(self) -> str:
+        if self.x11:
+            return self.x11
+        if self.ssh:
+            # The local DISPLAY says nothing about a remote machine.
+            return ":0"
+        return os.environ.get("DISPLAY") or "?"
+
+    @property
+    def is_remote(self) -> bool:
+        return bool(self.ssh)
+
+    @property
+    def label(self) -> str:
+        base = self.resolved_x11
+        return f"{self.ssh} {base}" if self.ssh else base
+
+    def target(self) -> str:
+        """Freshness key: one seat is one world."""
+        return "screen:" + self.label
+
+    def run(self, argv: list[str], timeout: int = 10):
+        """Run a display-bound command locally or over ssh.
+
+        BatchMode forbids password prompts — a harness must fail fast on
+        missing key auth, not hang waiting for a human to type.
+        """
+        if self.ssh:
+            remote = " ".join(shlex.quote(a) for a in argv)
+            cmd = ["ssh", "-o", "BatchMode=yes", self.ssh,
+                   f"DISPLAY={shlex.quote(self.resolved_x11)} {remote}"]
+            return subprocess.run(cmd, capture_output=True, timeout=timeout)
+        env = dict(os.environ, DISPLAY=self.resolved_x11)
+        return subprocess.run(argv, capture_output=True, timeout=timeout,
+                              env=env)
+
+
 def _num(value, action: str, pos: int) -> int:
     try:
         return int(round(float(value)))
@@ -120,9 +185,13 @@ def plan(action: str, args: list) -> list[list[str]]:
         raise ScreenError(f"screen.{action} takes {arity} argument(s), "
                           f"got {len(args)}")
 
+    # No `--sync` on mousemove: it can hang forever on nested X servers
+    # (Xephyr/Xvfb) waiting for a motion event that never fires. The
+    # pointer read-back in _verify_pointer provides the stronger
+    # guarantee anyway — arrival is confirmed, not just awaited.
     if action in ("click", "confirm"):
         x, y = _num(args[0], action, 0), _num(args[1], action, 1)
-        return [["mousemove", "--sync", str(x), str(y)], ["click", "1"]]
+        return [["mousemove", str(x), str(y)], ["click", "1"]]
     if action == "type":
         return [["type", "--clearmodifiers", "--delay", "12", str(args[0])]]
     if action == "key":
@@ -130,27 +199,27 @@ def plan(action: str, args: list) -> list[list[str]]:
     if action == "drag":
         x1, y1 = _num(args[0], action, 0), _num(args[1], action, 1)
         x2, y2 = _num(args[2], action, 2), _num(args[3], action, 3)
-        return [["mousemove", "--sync", str(x1), str(y1)],
+        return [["mousemove", str(x1), str(y1)],
                 ["mousedown", "1"],
-                ["mousemove", "--sync", str(x2), str(y2)],
+                ["mousemove", str(x2), str(y2)],
                 ["mouseup", "1"]]
     # scroll
     x, y = _num(args[0], action, 0), _num(args[1], action, 1)
     ticks = _num(args[2], action, 2)
     button = "4" if ticks < 0 else "5"
-    return ([["mousemove", "--sync", str(x), str(y)]]
+    return ([["mousemove", str(x), str(y)]]
             + [["click", button]] * abs(ticks))
 
 
-def _pointer() -> tuple[int, int]:
-    out = subprocess.run(["xdotool", "getmouselocation", "--shell"],
-                         capture_output=True, text=True, timeout=10).stdout
-    vals = dict(line.split("=", 1) for line in out.strip().splitlines()
+def _pointer(disp: Display) -> tuple[int, int]:
+    out = disp.run(["xdotool", "getmouselocation", "--shell"]).stdout
+    text = out.decode(errors="replace") if isinstance(out, bytes) else out
+    vals = dict(line.split("=", 1) for line in text.strip().splitlines()
                 if "=" in line)
     return int(vals.get("X", -1)), int(vals.get("Y", -1))
 
 
-def _verify_pointer(want_x: int, want_y: int) -> None:
+def _verify_pointer(disp: Display, want_x: int, want_y: int) -> None:
     """A move is only delivered if the pointer actually arrived.
 
     A multi-monitor X screen is a bounding box, not a union: an L-shaped
@@ -159,25 +228,34 @@ def _verify_pointer(want_x: int, want_y: int) -> None:
     program never named while the trace records what it asked for. Read
     the pointer back and refuse the divergence instead.
     """
-    got_x, got_y = _pointer()
+    got_x, got_y = _pointer(disp)
     if abs(got_x - want_x) > POINTER_TOLERANCE or \
             abs(got_y - want_y) > POINTER_TOLERANCE:
         raise ScreenError(
-            f"pointer did not reach ({want_x}, {want_y}) — it is at "
-            f"({got_x}, {got_y}). That coordinate is outside every "
-            "connected monitor (an L-shaped multi-monitor layout leaves "
-            "uncovered regions in the X screen), so the click would land "
-            "somewhere else. Check the layout with `xrandr "
+            f"pointer on {disp.label} did not reach ({want_x}, {want_y}) "
+            f"— it is at ({got_x}, {got_y}). That coordinate is outside "
+            "every connected monitor (an L-shaped multi-monitor layout "
+            "leaves uncovered regions in the X screen), so the click "
+            "would land somewhere else. Check the layout with `xrandr "
             "--listmonitors`.")
 
 
-def _require_xdotool() -> None:
+def _require_xdotool(disp: Display) -> None:
+    if disp.is_remote:
+        probe = disp.run(["sh", "-c", "command -v xdotool"])
+        if probe.returncode != 0:
+            err = probe.stderr.decode(errors="replace").strip()
+            raise ScreenError(
+                f"xdotool not available on {disp.ssh} (or ssh failed: "
+                f"{err[:120]}) — the remote seat needs xdotool installed "
+                "and key-based ssh auth (BatchMode)")
+        return
     if not shutil.which("xdotool"):
         raise ScreenError(
             "xdotool not found — the screen surface needs it to deliver "
             "input (Debian/Ubuntu: apt install xdotool). Set "
             "KIMIYA_SCREEN=none to record acts without delivering them.")
-    if not os.environ.get("DISPLAY"):
+    if disp.resolved_x11 == "?":
         raise ScreenError(
             "DISPLAY is unset — no X display to drive. Under Wayland, run "
             "the program in an Xorg session or an Xwayland-backed nested "
@@ -185,32 +263,34 @@ def _require_xdotool() -> None:
             "clients.")
 
 
-def perform(action: str, args: list) -> dict:
-    """Deliver one screen act. Returns a record for the trace."""
+def perform(action: str, args: list, disp: Display | None = None) -> dict:
+    """Deliver one screen act on a seat. Returns a record for the trace."""
+    disp = disp or Display()
     argv = plan(action, args)
     drv = driver_name()
-    rec = {"driver": drv, "delivered": False,
+    rec = {"driver": drv, "delivered": False, "seat": disp.label,
            "args": [_trace_arg(a) for a in args]}
     if drv == "none":
         return rec
     if drv != "xdotool":
         raise ScreenError(f"unknown screen driver {drv!r} "
                           "(known: xdotool, none)")
-    _require_xdotool()
+    _require_xdotool(disp)
     for cmd in argv:
         try:
-            subprocess.run(["xdotool", *cmd], check=True,
-                           capture_output=True, timeout=10)
-        except subprocess.CalledProcessError as e:
-            err = e.stderr.decode(errors="replace").strip()
-            raise ScreenError(
-                f"xdotool {' '.join(cmd)} failed: {err or e}") from None
+            out = disp.run(["xdotool", *cmd])
         except subprocess.TimeoutExpired:
             raise ScreenError(
-                f"xdotool {' '.join(cmd)} timed out") from None
+                f"xdotool {' '.join(cmd)} timed out on "
+                f"{disp.label}") from None
+        if out.returncode != 0:
+            err = out.stderr.decode(errors="replace").strip()
+            raise ScreenError(
+                f"xdotool {' '.join(cmd)} failed on {disp.label}: "
+                f"{err or out.returncode}")
         # Delivery contract: never press a button at an unverified point.
         if cmd[0] == "mousemove":
-            _verify_pointer(int(cmd[2]), int(cmd[3]))
+            _verify_pointer(disp, int(cmd[-2]), int(cmd[-1]))
     rec["delivered"] = True
     return rec
 
@@ -241,14 +321,17 @@ def _geom(region) -> str:
     return f"{w}x{h}+{x}+{y}"
 
 
-def monitors() -> dict[str, tuple[int, int, int, int]]:
+def monitors(disp: Display | None = None) -> dict[str, tuple[int, int, int, int]]:
     """Connected outputs as name -> (x, y, w, h), from xrandr."""
-    if not shutil.which("xrandr"):
+    disp = disp or Display()
+    if not disp.is_remote and not shutil.which("xrandr"):
         return {}
     try:
-        out = subprocess.run(["xrandr", "--listmonitors"], check=True,
-                             capture_output=True, text=True,
-                             timeout=10).stdout
+        res = disp.run(["xrandr", "--listmonitors"])
+        if res.returncode != 0:
+            return {}
+        out = res.stdout
+        out = out.decode(errors="replace") if isinstance(out, bytes) else out
     except (subprocess.SubprocessError, OSError):
         return {}
     found: dict[str, tuple[int, int, int, int]] = {}
@@ -278,17 +361,24 @@ def png_size(path) -> tuple[int, int]:
     return struct.unpack(">II", head[16:24])
 
 
-def _resolve_region(args: list) -> tuple[tuple | None, str]:
+def _resolve_region(args: list, disp: Display) -> tuple[tuple | None, str]:
     """(region, label) from the `observe screen(...)` arguments."""
     if not args:
-        return None, "root"
+        if disp.monitor:            # the seat's declared default region
+            args = [disp.monitor]
+        else:
+            return None, "root"
     if len(args) == 1:
         name = str(args[0])
-        mons = monitors()
+        if driver_name() == "none":
+            # Recording mode: no X server is consulted; the fixture (or
+            # exists:false) stands in and the name is kept as the label.
+            return None, name
+        mons = monitors(disp)
         if name in mons:
             return mons[name], name
         raise ScreenError(
-            f"no monitor named {name!r} — connected: "
+            f"no monitor named {name!r} on {disp.label} — connected: "
             f"{', '.join(sorted(mons)) or 'none detected'}")
     if len(args) == 4:
         x, y, w, h = (_num(a, "observe", i) for i, a in enumerate(args))
@@ -302,29 +392,41 @@ def _resolve_region(args: list) -> tuple[tuple | None, str]:
         "name, or four numbers (x, y, w, h)")
 
 
-def capture(args: list, dest_dir) -> dict:
-    """Take a screenshot. Returns the observation record.
+def capture(args: list, dest_dir, disp: Display | None = None) -> dict:
+    """Take a screenshot of a seat. Returns the observation record.
 
     `x`/`y` carry the capture origin so a coordinate found inside the
     image can be mapped back to an absolute screen coordinate — the
-    difference matters the moment a second monitor exists.
+    difference matters the moment a second monitor exists. Origins are
+    per-seat: two actors' captures never share a coordinate space.
     """
-    region, label = _resolve_region(args)
+    disp = disp or Display()
+    region, label = _resolve_region(args, disp)
     x, y = (region[0], region[1]) if region else (0, 0)
-    base = {"kind": "screen", "display": display(), "region": label,
-            "x": x, "y": y, "width": 0, "height": 0,
+    base = {"kind": "screen", "display": disp.label, "actor": disp.name,
+            "region": label, "x": x, "y": y, "width": 0, "height": 0,
             "path": "", "sha": "", "exists": False, "driver": driver_name()}
 
     if driver_name() == "none":
-        fixture = os.environ.get("KIMIYA_SCREEN_FIXTURE")
+        # Per-actor fixture first, shared fixture as the fallback — so a
+        # two-seat scenario can be replayed against two recordings.
+        fixture = (os.environ.get(f"KIMIYA_SCREEN_FIXTURE_{disp.name}")
+                   or os.environ.get("KIMIYA_SCREEN_FIXTURE"))
         if not fixture:
             # No screenshot was taken; say so rather than invent one.
             return base
         path = Path(fixture)
         if not path.exists():
-            raise ScreenError(f"KIMIYA_SCREEN_FIXTURE={fixture} does not "
-                              "exist")
+            raise ScreenError(f"screen fixture {fixture} does not exist")
         return _finish(base, path)
+
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    safe = f"{disp.name}-{label}".replace("/", "_").replace(":", "_")
+    path = dest / f"shot-{safe}.png"
+
+    if disp.is_remote:
+        return _capture_remote(disp, region, base, path)
 
     tool = next((t for t in CAPTURE_TOOLS if shutil.which(t[0])), None)
     if tool is None:
@@ -338,23 +440,55 @@ def capture(args: list, dest_dir) -> dict:
         raise ScreenError(
             "gnome-screenshot cannot capture a region; install maim, "
             "import (ImageMagick) or scrot for region capture")
-    if not os.environ.get("DISPLAY"):
+    if disp.resolved_x11 == "?":
         raise ScreenError("DISPLAY is unset — no X display to capture")
 
-    dest = Path(dest_dir)
-    dest.mkdir(parents=True, exist_ok=True)
-    path = dest / f"shot-{label.replace('/', '_')}.png"
     try:
-        subprocess.run(build(path, region), check=True,
-                       capture_output=True, timeout=30)
-    except subprocess.CalledProcessError as e:
-        err = e.stderr.decode(errors="replace").strip()
-        raise ScreenError(f"{name} failed: {err or e}") from None
+        out = disp.run(build(path, region), timeout=30)
     except subprocess.TimeoutExpired:
-        raise ScreenError(f"{name} timed out") from None
+        raise ScreenError(f"{name} timed out on {disp.label}") from None
+    if out.returncode != 0:
+        err = out.stderr.decode(errors="replace").strip()
+        raise ScreenError(f"{name} failed on {disp.label}: "
+                          f"{err or out.returncode}")
     if not path.exists():
         raise ScreenError(f"{name} produced no file at {path}")
     base["driver"] = name
+    return _finish(base, path)
+
+
+def _capture_remote(disp: Display, region, base: dict, path: Path) -> dict:
+    """Capture a remote seat: the tool runs there, the PNG streams back.
+
+    One ssh round trip: a shell snippet picks whichever of maim/import
+    exists on the remote host and writes the PNG to stdout.
+    """
+    if region:
+        g = _geom(region)
+        snippet = (f"if command -v maim >/dev/null 2>&1; then "
+                   f"maim -g {shlex.quote(g)}; "
+                   f"elif command -v import >/dev/null 2>&1; then "
+                   f"import -window root -crop {shlex.quote(g)} +repage "
+                   f"png:-; else echo NOTOOL >&2; exit 9; fi")
+    else:
+        snippet = ("if command -v maim >/dev/null 2>&1; then maim; "
+                   "elif command -v import >/dev/null 2>&1; then "
+                   "import -window root png:-; "
+                   "else echo NOTOOL >&2; exit 9; fi")
+    try:
+        out = disp.run(["sh", "-c", snippet], timeout=60)
+    except subprocess.TimeoutExpired:
+        raise ScreenError(f"remote capture timed out on "
+                          f"{disp.label}") from None
+    if out.returncode == 9:
+        raise ScreenError(f"no screenshot tool on {disp.ssh} — install "
+                          "maim or ImageMagick there")
+    if out.returncode != 0 or not out.stdout:
+        err = out.stderr.decode(errors="replace").strip()
+        raise ScreenError(f"remote capture failed on {disp.label}: "
+                          f"{err[:200] or out.returncode}")
+    path.write_bytes(out.stdout)
+    base["driver"] = "ssh"
     return _finish(base, path)
 
 

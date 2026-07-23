@@ -53,7 +53,7 @@ class Compiler:
             return f"(-({self.expr(e.operand)}))"
         if isinstance(e, A.ObserveExpr):
             args = ", ".join(self.expr(a) for a in e.args)
-            return f"rt.observe({e.surface!r}, [{args}])"
+            return f"rt.observe({e.surface!r}, [{args}], {e.actor!r})"
         raise NotImplementedError(f"expr {e}")
 
     def binop(self, e: A.BinOp) -> str:
@@ -119,7 +119,8 @@ class Compiler:
             self.retry(s, None)
         elif isinstance(s, A.ActStmt):
             args = ", ".join(self.expr(a) for a in s.args)
-            self.emit(f"rt.act({s.surface!r}, {s.action!r}, [{args}])")
+            self.emit(f"rt.act({s.surface!r}, {s.action!r}, [{args}], "
+                      f"{s.actor!r})")
         elif isinstance(s, A.SettleStmt):
             self.emit(f"rt.settle({self.guard_lambda(s.guard)}, "
                       f"{s.within}, {s.line})")
@@ -185,12 +186,15 @@ class Compiler:
     # ---------------- module ----------------
     def compile(self) -> str:
         agents = []
+        displays = []
         contexts = {}
         schemas = {}
         fns = []
         pyfns = []
         for d in self.prog.decls:
-            if isinstance(d, A.PoolDecl):
+            if isinstance(d, A.DisplayDecl):
+                displays.append({"name": d.name, **d.fields})
+            elif isinstance(d, A.PoolDecl):
                 agents.append({"name": d.name, "model": d.model})
             elif isinstance(d, A.AgentDecl):
                 agents.append({"name": d.name, **d.fields})
@@ -217,6 +221,7 @@ class Compiler:
         # repr, not json.dumps: agent fields may be booleans (vision), and
         # JSON's `true` is not Python.
         self.emit(f"_AGENTS = {agents!r}")
+        self.emit(f"_DISPLAYS = {displays!r}")
         self.emit(f"_CONTEXTS = {json.dumps(contexts)}")
         self.emit(f"_SCHEMAS = {json.dumps(schemas)}")
         self.emit(f"_PY_EXTS = {json.dumps(self.py_exts)}")
@@ -277,7 +282,7 @@ class Compiler:
         self.emit("models = sys.argv[1].split(',') if len(sys.argv) > 1 "
                   "else None")
         self.emit(f"rt = Runtime(__file__, _AGENTS, _CONTEXTS, _SCHEMAS, "
-                  f"_PY_EXTS, models)")
+                  f"_PY_EXTS, models, displays=_DISPLAYS)")
         self.emit("_load_py(rt)")
         fnmap = ("{" + ", ".join(f"{f.name!r}: _fn_{f.name}"
                                  for f in fns) + "}")

@@ -86,6 +86,14 @@ class Interp:
                     if isinstance(d, A.FnDecl)}
         self.py_funcs = py_funcs or {}
         self.py_exts = py_exts or []
+        self.displays: dict[str, screen.Display] = {}
+        for d in prog.decls:
+            if isinstance(d, A.DisplayDecl):
+                f = d.fields
+                self.displays[d.name] = screen.Display(
+                    name=d.name, x11=f.get("x11"), ssh=f.get("ssh"),
+                    monitor=f.get("monitor"))
+        self.default_display = screen.Display()
         bindings: dict[str, Agent] = {}
         for d in prog.decls:
             if isinstance(d, A.PoolDecl):
@@ -170,7 +178,10 @@ class Interp:
                         "acts": self.screen_acts,
                         "locates": self.locates,
                         "locates_cached": self.locates_cached,
-                        "locates_replayed": self.locates_replayed}
+                        "locates_replayed": self.locates_replayed,
+                        "actors": {n: {"label": d.label,
+                                       "ssh": d.is_remote}
+                                   for n, d in self.displays.items()}}
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
             "cost": dict(self.cost, seconds=round(secs, 1)),
@@ -425,16 +436,28 @@ class Interp:
             raise KimiyaRuntimeError(f"unknown surface {s.surface}")
         return self.act_file(s, args)
 
-    def act_screen(self, s: A.ActStmt, args: list):
-        self.check_freshness(screen.target(), s.line)
+    def display_for(self, actor: str | None, line: int) -> screen.Display:
+        if actor is None:
+            return self.default_display
         try:
-            rec = screen.perform(s.action, args)
+            return self.displays[actor]
+        except KeyError:
+            raise KimiyaRuntimeError(
+                f"line {line}: '{actor}' is not a declared display") \
+                from None
+
+    def act_screen(self, s: A.ActStmt, args: list):
+        disp = self.display_for(s.actor, s.line)
+        self.check_freshness(disp.target(), s.line)
+        try:
+            rec = screen.perform(s.action, args, disp=disp)
         except screen.ScreenError as e:
             raise KimiyaRuntimeError(f"line {s.line}: {e}") from None
-        self.last_act[screen.target()] = time.time()
+        self.last_act[disp.target()] = time.time()
         self.screen_acts += 1
         self.trace.append({"kind": "act", "surface": "screen",
-                           "action": s.action, "target": screen.target(),
+                           "action": s.action, "target": disp.target(),
+                           **({"actor": s.actor} if s.actor else {}),
                            "line": s.line, **rec})
 
     def act_file(self, s: A.ActStmt, args: list):
@@ -476,9 +499,15 @@ class Interp:
         deadline = time.time() + s.within
         while time.time() < deadline:
             if self.eval_guard(s.guard):
+                if s.actor is not None:
+                    # The wait was on this actor's world; a successful
+                    # settle is an observation of it.
+                    disp = self.display_for(s.actor, s.line)
+                    self.last_obs[disp.target()] = time.time()
                 return
             time.sleep(min(1.0, s.within / 10))
-        raise Bolt(f"settle deadline ({s.within}s) elapsed at line {s.line}")
+        raise Bolt(f"settle deadline ({s.within}s) elapsed at line {s.line}"
+                   + (f" (actor {s.actor})" if s.actor else ""))
 
     # ------------------------------------------------ expressions
     def call_fn(self, decl, args):
@@ -566,11 +595,12 @@ class Interp:
 
     def observe_screen(self, e: A.ObserveExpr):
         args = [self.eval(a) for a in e.args]
+        disp = self.display_for(e.actor, e.line)
         try:
-            rec = screen.capture(args, self.workspace / "shots")
+            rec = screen.capture(args, self.workspace / "shots", disp=disp)
         except screen.ScreenError as ex:
             raise KimiyaRuntimeError(f"line {e.line}: {ex}") from None
-        self.last_obs[screen.target()] = time.time()
+        self.last_obs[disp.target()] = time.time()
         self.trace.append({"kind": "observe", "surface": "screen",
                            "line": e.line,
                            **{k: v for k, v in rec.items() if k != "kind"}})

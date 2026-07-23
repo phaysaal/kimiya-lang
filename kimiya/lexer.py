@@ -17,7 +17,7 @@ KEYWORDS = {
     "contradicts", "irreversible", "recoverable",
     "fn", "return", "use", "pyfn", "python", "agent",
 }
-WKEYWORDS = {"act", "observe", "settle", "within", "inv", "compensate"}
+WKEYWORDS = {"act", "observe", "settle", "within", "inv", "compensate", "display"}
 
 OPS = [":=", "|=", "==", "!=", "<=", ">=", "~", "<", ">", "(", ")", "[", "]",
        "{", "}", ",", ".", ":", "+", "-", "*", "/", "="]

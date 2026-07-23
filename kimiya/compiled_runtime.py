@@ -30,13 +30,17 @@ class Bolt(Exception):
 
 class Runtime:
     def __init__(self, source_file: str, agents, contexts, schemas,
-                 py_exts=None, models_override=None):
+                 py_exts=None, models_override=None, displays=None):
         self.workspace = Path(source_file).parent / ".kimiya"
         self.workspace.mkdir(exist_ok=True)
         self.trace = Trace(self.workspace)
         self.sheets = Datasheets(self.workspace)
         self.locate_cache = vision.LocateCache(self.workspace)
         self.replay = os.environ.get("KIMIYA_REPLAY") == "1"
+        self.displays = {d["name"]: screen.Display(
+            name=d["name"], x11=d.get("x11"), ssh=d.get("ssh"),
+            monitor=d.get("monitor")) for d in (displays or [])}
+        self.default_display = screen.Display()
         self.oracle = get_oracle()
         self.contexts = contexts        # name -> purpose text
         self.schemas = schemas          # name -> [field, ...]
@@ -201,11 +205,20 @@ class Runtime:
     def abstain(self, line=0):
         raise Bolt(f"abstain at line {line}")
 
-    def observe(self, surface, args):
+    def _display_for(self, actor):
+        if actor is None:
+            return self.default_display
+        try:
+            return self.displays[actor]
+        except KeyError:
+            raise Bolt(f"'{actor}' is not a declared display") from None
+
+    def observe(self, surface, args, actor=None):
         self.cost["observes"] += 1
         if surface == "screen":
             try:
-                rec = screen.capture(args, self.workspace / "shots")
+                rec = screen.capture(args, self.workspace / "shots",
+                                     disp=self._display_for(actor))
             except screen.ScreenError as e:
                 raise Bolt(str(e)) from None
             self.trace.append({"kind": "observe", "surface": "screen",
@@ -224,16 +237,18 @@ class Runtime:
                            "sha": rec["sha"]})
         return rec
 
-    def act(self, surface, action, args):
+    def act(self, surface, action, args, actor=None):
         self.cost["acts"] += 1
         if surface == "screen":
             self.screen_acts += 1
+            disp = self._display_for(actor)
             try:
-                rec = screen.perform(action, args)
+                rec = screen.perform(action, args, disp=disp)
             except screen.ScreenError as e:
                 raise Bolt(str(e)) from None
             self.trace.append({"kind": "act", "surface": "screen",
-                               "action": action, "target": screen.target(),
+                               "action": action, "target": disp.target(),
+                               **({"actor": actor} if actor else {}),
                                **rec})
             return
         path = Path(_to_str(args[0]))
@@ -330,7 +345,10 @@ class Runtime:
                         "acts": self.screen_acts,
                         "locates": self.locates,
                         "locates_cached": self.locates_cached,
-                        "locates_replayed": self.locates_replayed}
+                        "locates_replayed": self.locates_replayed,
+                        "actors": {n: {"label": d.label,
+                                       "ssh": d.is_remote}
+                                   for n, d in self.displays.items()}}
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
             "cost": dict(self.cost), "trace_records": self.trace.count(),

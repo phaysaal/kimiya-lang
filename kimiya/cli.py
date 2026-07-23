@@ -114,6 +114,18 @@ def _announce_screen(prog):
     else:
         print(f"    driver: {drv} on display {screen.display()}   "
               "(KIMIYA_SCREEN=none records without delivering)")
+    for d in prog.decls:
+        if isinstance(d, A.DisplayDecl):
+            f = d.fields
+            if f.get("ssh"):
+                print(f"    actor {d.name}: {f['ssh']} "
+                      f"{f.get('x11', ':0 (ambient)')} — input and "
+                      "screenshots travel over ssh to that machine")
+            else:
+                where = f.get("x11") or "the ambient DISPLAY"
+                extra = f" (monitor {f['monitor']})" if f.get("monitor") \
+                    else ""
+                print(f"    actor {d.name}: {where}{extra}")
 
 
 def cmd_check(args):
@@ -203,6 +215,9 @@ def cmd_run(args):
             if extras:
                 line += f" ({', '.join(extras)})"
         print(line)
+        for aname, ad in (sc.get("actors") or {}).items():
+            kind = "ssh" if ad["ssh"] else "local"
+            print(f"  actor  : {aname} → {ad['label']} ({kind})")
         if sc.get("locates_replayed"):
             print(f"  ⚠ {sc['locates_replayed']} locate(s) replayed from a "
                   "prior run against changed pixels — layout stability is "

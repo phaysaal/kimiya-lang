@@ -1,0 +1,4 @@
+-- K13: an actor index must name a declared display.
+pool A = "llama3.1:8b"
+
+act<Ghost> screen.click(100, 200)

@@ -1,0 +1,7 @@
+-- An actor index is a seat at a screen; files have no seat.
+pool P = "llama3.1:8b"
+
+display A:
+    x11 = ":1"
+
+act<A> file.append("log.txt", "hello")

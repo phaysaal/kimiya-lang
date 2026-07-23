@@ -87,7 +87,7 @@ class Parser:
         self.skip_newlines()
         while not self.at("EOF"):
             if self.at_kw("pool", "context", "schema", "effect", "fn",
-                          "use", "pyfn", "agent"):
+                          "use", "pyfn", "agent", "display"):
                 prog.decls.append(self.decl())
             else:
                 prog.body.append(self.stmt())
@@ -104,6 +104,23 @@ class Parser:
             model = self.expect("STRING").value
             self.expect("NEWLINE")
             return A.PoolDecl(name, model, t.line)
+        if self.at_kw("display"):
+            self.next()
+            name = self.expect("NAME").value
+            self.expect("OP", ":")
+            self.expect("NEWLINE")
+            self.expect("INDENT")
+            dfields = {}
+            while not self.at("DEDENT"):
+                self.skip_newlines()
+                if self.at("DEDENT"):
+                    break
+                key = self.expect("NAME").value
+                self.expect("OP", "=")
+                dfields[key] = self.expect("STRING").value
+                self.expect("NEWLINE")
+            self.expect("DEDENT")
+            return A.DisplayDecl(name, dfields, t.line)
         if self.at_kw("agent"):
             self.next()
             name = self.expect("NAME").value
@@ -287,21 +304,24 @@ class Parser:
             return self.retry_stmt()
         if self.at_kw("act"):
             self.next()
+            actor = self.actor_index()
             surface = self.expect("NAME").value
             self.expect("OP", ".")
             action = self.expect("NAME").value
             self.expect("OP", "(")
             args = self.args_until_rparen()
             self.end_stmt()
-            return A.ActStmt(surface, action, args, t.line)
+            return A.ActStmt(surface, action, args, actor=actor,
+                             line=t.line)
         if self.at_kw("settle"):
             self.next()
+            actor = self.actor_index()
             self.expect_kw("until")
             g = self.guard()
             self.expect_kw("within")
             secs = float(self.expect("NUMBER").value)
             self.end_stmt()
-            return A.SettleStmt(g, secs, t.line)
+            return A.SettleStmt(g, secs, actor=actor, line=t.line)
         if self.at("NAME") and self.peek(1).kind == "OP" \
                 and self.peek(1).value == ":=":
             name = self.next().value
@@ -382,9 +402,10 @@ class Parser:
         if self.at_kw("observe"):
             self.next()
             surface = self.expect("NAME").value
+            actor = self.actor_index()
             self.expect("OP", "(")
             args = self.args_until_rparen()
-            return A.ObserveExpr(surface, args, t.line)
+            return A.ObserveExpr(surface, args, actor=actor, line=t.line)
         if self.at_kw("retry"):
             # x := retry ... — value is the body's last assigned variable
             return self.retry_stmt()
@@ -445,6 +466,15 @@ class Parser:
             return A.JudgeGuard(k, tau, relation, left, right, ctx,
                                 panel, paras, t.line)
         raise ParseError(f"line {t.line}: expected check or judge guard")
+
+    def actor_index(self):
+        """An optional `<NAME>` after act/settle/observe-surface."""
+        if self.at("OP", "<"):
+            self.next()
+            actor = self.expect("NAME").value
+            self.expect("OP", ">")
+            return actor
+        return None
 
     # ------------- expressions -------------
     def args_until_rparen(self) -> list:
@@ -536,9 +566,10 @@ class Parser:
         if self.at_kw("observe"):
             self.next()
             surface = self.expect("NAME").value
+            actor = self.actor_index()
             self.expect("OP", "(")
             args = self.args_until_rparen()
-            return A.ObserveExpr(surface, args, t.line)
+            return A.ObserveExpr(surface, args, actor=actor, line=t.line)
         if self.at("OP", "["):
             self.next()
             items = []

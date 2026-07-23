@@ -99,6 +99,21 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             can_see[d.name] = Agent(
                 name=d.name, model=fk.get("model", ""),
                 vision_declared=fk.get("vision")).vision
+    displays = {d.name for d in prog.decls if isinstance(d, A.DisplayDecl)}
+    for d in prog.decls:
+        if isinstance(d, A.DisplayDecl):
+            for k in d.fields:
+                if k not in ("x11", "ssh", "monitor"):
+                    r.err(d.line, f"display '{d.name}': unknown field "
+                                  f"'{k}' (known: x11, ssh, monitor)")
+
+    def chk_actor(actor, line, what):
+        """K13: an actor index must name a declared display."""
+        if actor is not None and actor not in displays:
+            r.err(line, f"{what}<{actor}>: '{actor}' is not a declared "
+                        "display — declare it with `display "
+                        f"{actor}:` (x11 / ssh / monitor)")
+
     contexts = {d.name for d in prog.decls if isinstance(d, A.ContextDecl)}
     schemas = ({d.name for d in prog.decls if isinstance(d, A.SchemaDecl)}
                | BUILTIN_SCHEMAS)
@@ -155,6 +170,11 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             if e.surface not in OBSERVE_SURFACES:
                 r.err(e.line, f"unknown observe surface '{e.surface}' "
                               f"(known: {', '.join(sorted(OBSERVE_SURFACES))})")
+            if e.actor is not None and e.surface != "screen":
+                r.err(e.line, "an actor index applies to the screen "
+                              f"surface only — observe {e.surface}<"
+                              f"{e.actor}> has no meaning")
+            chk_actor(e.actor, e.line, f"observe {e.surface}")
             for a in e.args:
                 chk_expr(a)
 
@@ -326,6 +346,11 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             chk_retry(s)
         elif isinstance(s, A.ActStmt):
             key = (s.surface, s.action)
+            if s.actor is not None and s.surface != "screen":
+                r.err(s.line, "an actor index applies to the screen "
+                              f"surface only — act<{s.actor}> "
+                              f"{s.surface}.{s.action} has no meaning")
+            chk_actor(s.actor, s.line, "act")
             if s.surface not in KNOWN_SURFACES:
                 r.err(s.line, f"unknown act surface '{s.surface}' "
                               f"(known: {', '.join(sorted(KNOWN_SURFACES))})")
@@ -350,6 +375,7 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                           "it first in a checked/judged if-branch (the "
                           "verified gate)")
         elif isinstance(s, A.SettleStmt):
+            chk_actor(s.actor, s.line, "settle")
             chk_guard(s.guard, None)
             if s.within <= 0:
                 r.err(s.line, "settle deadline must be positive")

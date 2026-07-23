@@ -330,6 +330,61 @@ Drivers: `KIMIYA_SCREEN=xdotool` (default) delivers; `KIMIYA_SCREEN=none`
 records the acts and delivers nothing. `KIMIYA_MOCK=1` implies `none`, so
 the test suite can never touch a real cursor.
 
+### Actors: `display` declarations and `act<A>` / `observe screen<A>` / `settle<A>`
+
+A two-user scenario needs two *seats* — places where a screen exists and
+input can land. Declare them, then index the world constructs:
+
+```
+display A:
+    monitor = "eDP-1"        -- a region of the ambient X display
+
+display B:
+    x11 = ":1"               -- another X server on this machine
+    -- or: ssh = "user@lab"  -- another machine entirely
+
+a := observe screen<A>()                  -- A's screen (its monitor default)
+act<A> screen.click(plus.x, plus.y)       -- input lands on A's seat
+settle<A> until check group_exists(g) within 12
+b := observe screen<B>()                  -- B's seat: independent world
+act<B> screen.type(code)
+```
+
+Display fields: `x11` (X display; remote seats default to `:0`), `ssh`
+(a remote host — xdotool and the screenshot tool run there over
+BatchMode ssh, and the PNG streams back), `monitor` (default capture
+region by xrandr name). An unindexed `act screen...` / `observe
+screen(...)` is the ambient local display, unchanged.
+
+What the index buys:
+
+- **Per-seat coordinate spaces.** Every capture carries its seat and
+  origin; a box found in B's capture can only produce a click delivered
+  to B. Cross-seat confusion is unrepresentable, not just unlikely.
+- **Per-seat freshness.** Each seat is its own world in the stale-read
+  ledger; acting on A never marks B's observations stale. A successful
+  `settle<A>` counts as an observation of A's world.
+- **K13.** An actor index must name a declared display, and only the
+  screen surface has seats — `act<A> file.delete(...)` is rejected at
+  check time.
+- **Disclosure.** The pre-run banner lists every actor and where it
+  resolves (ssh seats are called out — input and screenshots travel to
+  that machine), and the certificate carries the actor table:
+
+  ```
+    screen : 8 act(s) via none on screen::0, 4 locate(s)
+    actor  : A → :0 (local)
+    actor  : B → user@lab :0 (ssh)
+  ```
+
+**One honest caveat:** two actors that resolve to the same X server
+share one pointer and one keyboard focus — the names then label intent,
+not independence, and interleaving their acts can interfere. Distinct
+`x11`/`ssh` seats are genuinely independent (verified live: a click and
+typing on a nested `:7` server left the ambient pointer untouched).
+Per-actor recordings for offline runs: `KIMIYA_SCREEN_FIXTURE_A=...`
+falls back to the shared `KIMIYA_SCREEN_FIXTURE`.
+
 ### Looking: `observe screen(...)` and the vision locator
 
 ```
@@ -511,6 +566,7 @@ into instant compile errors.
 ```
 program  := (decl | stmt)*
 decl     := pool NAME = STRING
+          | display NAME: (x11|ssh|monitor = STRING)*
           | context NAME: (domain|preserve|allow_loss = ...)+
           | schema NAME: (field: type)+
           | effect SURFACE.ACTION (irreversible|recoverable)
@@ -518,8 +574,8 @@ stmt     := NAME := rhs | check E | print E | commit(E) | abstain
           | if GUARD: BLOCK [else: BLOCK]
           | forall NAME in E: BLOCK
           | retry budget N until GUARD: BLOCK [inv E] [compensate: BLOCK]
-          | act SURFACE.ACTION(args)
-          | settle until GUARD within SECONDS
+          | act[<ACTOR>] SURFACE.ACTION(args)
+          | settle[<ACTOR>] until GUARD within SECONDS
 rhs      := gen<SCHEMA>(E) [by POOL]
           | select<RECALL>(E, E) [under CTX]
           | observe file(E)
@@ -531,7 +587,7 @@ GUARD    := check E
           | judge<K,TAU> shows(E, E) under CTX [panel [P,...]]
 rhs      := ... | select<RECALL>(E, E) [under CTX] [by POOL]
                                        -- `by` required for a screen store
-          | observe screen([NAME | x, y, w, h])
+          | observe screen[<ACTOR>]([NAME | x, y, w, h])
 ```
 
 Comments `--`; indentation is significant (spaces only). Builtins: `len
@@ -610,10 +666,12 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
 - `select` over a **text** store is still a mechanical keyword filter and
   its declared recall is still the programmer's claim. Only the vision
   path is instrument-backed.
-- There is no agent-indexed `act<A>` / `settle<A>`: a program drives one
-  display. Multiple actors are staged as multiple monitors (see
-  `examples/gui_collab.kim`), which works because captures carry their
-  origin, but two actors on *separate machines* are not expressible.
+- Remote (`ssh`) seats need key-based auth (BatchMode — the harness
+  fails fast rather than hanging on a password prompt), xdotool, and
+  maim or ImageMagick on the remote host. Latency per act is one ssh
+  round trip.
+- Actors sharing one X server share one pointer — see the caveat under
+  Actors above.
 - `observe screen(...)` under `KIMIYA_SCREEN=none` serves
   `KIMIYA_SCREEN_FIXTURE` if set and otherwise reports `exists: false`;
   a program that does not check `.exists` will abstain rather than judge
