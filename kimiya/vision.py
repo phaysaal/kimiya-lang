@@ -34,12 +34,37 @@ import re
 
 LOCATE_SYSTEM = (
     "You LOCATE user-interface controls in a screenshot. Return ONLY a "
-    "JSON array. Each element: {\"box_2d\": [ymin, xmin, ymax, xmax], "
+    "JSON array. Each element: {\"box\": [x0, y0, x1, y1], "
     "\"label\": \"<visible text or role>\", \"confidence\": <0..1>}. "
-    "Coordinates are integers normalized to 0-1000 over the image, "
-    "origin top-left. Return the best match first. Return [] if the "
+    "Coordinates are integer PIXELS of the image as given, origin "
+    "top-left: x0,y0 is the control's top-left corner and x1,y1 its "
+    "bottom-right. Return the best match first. Return [] if the "
     "described control is not visible. No prose, no markdown fences."
 )
+
+# Structured-output schema for backends that can enforce one, so a
+# locate returns valid JSON by construction rather than by regex salvage.
+LOCATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "controls": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "box": {"type": "array",
+                            "items": {"type": "integer"}},
+                    "label": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["box", "label", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["controls"],
+    "additionalProperties": False,
+}
 
 
 def locate_task(context: str | None) -> str:
@@ -48,25 +73,37 @@ def locate_task(context: str | None) -> str:
 
 
 def _parse_boxes(text: str) -> list[dict]:
+    """Salvage a control list from a model reply.
+
+    Structured outputs make this exact on backends that support them;
+    it stays tolerant for the ones that don't — a bare array, an object
+    wrapping one, and the usual markdown fencing all parse.
+    """
     text = re.sub(r"^```(json)?|```$", "", text.strip(), flags=re.M).strip()
-    m = re.search(r"\[.*\]", text, flags=re.S)
-    if not m:
-        return []
-    try:
-        raw = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return []
+    raw = None
+    for pattern in (r"\{.*\}", r"\[.*\]"):
+        m = re.search(pattern, text, flags=re.S)
+        if not m:
+            continue
+        try:
+            raw = json.loads(m.group(0))
+            break
+        except json.JSONDecodeError:
+            continue
+    if isinstance(raw, dict):
+        raw = (raw.get("controls") or raw.get("boxes")
+               or raw.get("results") or [raw])
     if not isinstance(raw, list):
         return []
     out = []
     for item in raw:
         if not isinstance(item, dict):
             continue
-        box = item.get("box_2d") or item.get("box") or item.get("bbox")
+        box = item.get("box") or item.get("bbox") or item.get("box_2d")
         if not (isinstance(box, list) and len(box) == 4):
             continue
         try:
-            ymin, xmin, ymax, xmax = (float(v) for v in box)
+            x0, y0, x1, y1 = (float(v) for v in box)
         except (TypeError, ValueError):
             continue
         conf = item.get("confidence", item.get("score", 0.0))
@@ -74,39 +111,44 @@ def _parse_boxes(text: str) -> list[dict]:
             conf = float(conf)
         except (TypeError, ValueError):
             conf = 0.0
-        out.append({"box": (ymin, xmin, ymax, xmax),
+        out.append({"box": (x0, y0, x1, y1),
                     "label": str(item.get("label", "")),
                     "confidence": conf})
     return out
 
 
 def _to_pixels(box, shot: dict) -> dict:
-    """Normalized 0-1000 box -> absolute screen rect and centre."""
-    ymin, xmin, ymax, xmax = box
-    w, h = shot.get("width") or 0, shot.get("height") or 0
+    """Image-pixel box -> absolute screen rect and centre.
+
+    The only transform is the capture origin. Coordinates arrive as
+    pixels of the image as captured, so a control found in a monitor
+    capture that starts at (1920, 0) comes back at its true screen
+    position rather than at its offset within the crop.
+    """
+    x0, y0, x1, y1 = box
     ox, oy = shot.get("x") or 0, shot.get("y") or 0
-    x1, x2 = xmin / 1000.0 * w, xmax / 1000.0 * w
-    y1, y2 = ymin / 1000.0 * h, ymax / 1000.0 * h
     return {
-        "x": round(ox + (x1 + x2) / 2),      # centre, absolute
-        "y": round(oy + (y1 + y2) / 2),
-        "w": round(abs(x2 - x1)),
-        "h": round(abs(y2 - y1)),
-        "left": round(ox + min(x1, x2)),
-        "top": round(oy + min(y1, y2)),
+        "x": round(ox + (x0 + x1) / 2),      # centre, absolute
+        "y": round(oy + (y0 + y1) / 2),
+        "w": round(abs(x1 - x0)),
+        "h": round(abs(y1 - y0)),
+        "left": round(ox + min(x0, x1)),
+        "top": round(oy + min(y0, y1)),
     }
 
 
 def locate(oracle, agent, trace, shot: dict, description: str,
            purpose: str, context: str | None) -> list[dict]:
     """Find controls matching `description` in `shot`. Best first."""
+    w, h = shot.get("width") or 0, shot.get("height") or 0
     prompt = (f"PURPOSE: {purpose}\n\n"
-              f"Locate in the screenshot: {description}")
+              f"The screenshot is {w}x{h} pixels.\n"
+              f"Locate in it: {description}")
     task = locate_task(context)
     try:
         out = oracle.complete(agent, prompt, system=LOCATE_SYSTEM,
-                              temperature=0.0, max_tokens=512,
-                              images=[shot["path"]])
+                              temperature=0.0, max_tokens=2048,
+                              images=[shot["path"]], schema=LOCATE_SCHEMA)
         err = None
     except (OSError, RuntimeError) as e:
         out, err = "", str(e)[:200]

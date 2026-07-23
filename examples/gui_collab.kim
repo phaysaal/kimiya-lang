@@ -10,21 +10,24 @@
 -- found inside B's capture come back as absolute coordinates, so a click
 -- meant for B cannot land on A.
 --
+-- The locator runs Opus 4.8 through the `claude` CLI — the same path the
+-- seenslide GUI harness measured its datasheet through, which is why an
+-- imported β≥.975 transfers to it rather than being an assertion.
+--
 -- Offline:  KIMIYA_MOCK=1 KIMIYA_SCREEN_FIXTURE=<png> kimiya run …
 
 agent L:                          -- the locator: it has to see
-    backend = "ollama"
-    model   = "llama3.2-vision:11b"
-    vision  = true
+    backend = "claude_cli"        -- headless Claude Code: no key, no SDK
+    model   = "claude-opus-4-8"
 
-agent J1:                         -- judge, family 1
-    backend = "ollama"
-    model   = "gemma3:12b"
-    vision  = true
+agent J1:                         -- judge, family: anthropic
+    backend = "claude_cli"
+    model   = "claude-opus-4-8"
 
-agent J2:                         -- judge, family 2 (J ⋪ C)
-    backend = "ollama"
-    model   = "qwen3-vl:8b"
+agent J2:                         -- judge, family: google  (J ⋪ C)
+    backend = "openrouter"        -- one panel member must see differently:
+    model   = "google/gemini-2.5-flash"   -- two Opus voters would be one
+    key_env = "OPENROUTER_API_KEY"        -- pair of eyes certifying itself
     vision  = true
 
 use python "collabdb.py"

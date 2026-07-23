@@ -37,6 +37,7 @@ declare -A want=(
   [blind_locator]="is not vision-capable"
   [blind_shows_panel]="would vote on a screenshot they never saw"
   [shows_not_screenshot]="takes a screenshot as its first argument"
+  [blind_claude_url]="unknown backend"
 )
 for name in "${!want[@]}"; do
   out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)
@@ -66,6 +67,7 @@ printf '{"talks":[{"name":"Release notes","published":true}],"status_banner":"Re
 printf 'The project deadline is Friday.\nBudget unchanged.\nDeadline moved from Monday to Friday by the sponsor.\n' > "$TMP/notes.txt"
 printf 'Meeting moved to 3pm.\nInvoice 42 paid.\nServer restarted twice.\n' > "$TMP/inbox.txt"
 printf '12\n15\n11\n90\n13\n14\n12\n' > "$TMP/latencies.txt"
+export OLDPWD_REPO="$PWD"
 cd "$TMP"
 KIMIYA_MOCK=1 python3 -m kimiya run grounded_summary.kim | grep -q "COMMITTED" \
   || { echo "FAIL: grounded_summary did not commit"; exit 1; }
@@ -139,6 +141,15 @@ c = json.load(open(".kimiya/certificate.json"))
 assert c["theta"] > 0.8, c["theta"]
 PY
 unset KIMIYA_SCREEN_FIXTURE
+
+echo "== claude backends: declared, vision-capable, non-local =="
+python3 "$OLDPWD_REPO/tests/check_backends.py" \
+  || { echo "FAIL: claude backend wiring"; exit 1; }
+cout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" python3 -m kimiya run gui_collab.kim)
+grep -q "via claude CLI" <<<"$cout" \
+  || { echo "FAIL: claude CLI egress not reported"; echo "$cout"; exit 1; }
+grep -q "screenshots leave the machine" <<<"$cout" \
+  || { echo "FAIL: screenshot egress not announced"; echo "$cout"; exit 1; }
 
 echo "== observe screen: no fixture, no invented screenshot =="
 nout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none python3 -m kimiya run gui_collab.kim || true)

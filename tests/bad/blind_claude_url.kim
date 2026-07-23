@@ -1,0 +1,7 @@
+-- Unknown backends are rejected before any model runs.
+agent L:
+    backend = "anthropik"
+    model   = "claude-opus-4-8"
+
+shot := observe screen("eDP-1")
+check shot.exists

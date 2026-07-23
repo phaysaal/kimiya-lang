@@ -75,6 +75,29 @@ def _screen_acts(prog):
     return found
 
 
+def _screen_observes(prog) -> bool:
+    """Does the program capture the display anywhere?"""
+    from .checker import _substmts
+    found = [False]
+
+    def walk_expr(e):
+        if isinstance(e, A.ObserveExpr) and e.surface == "screen":
+            found[0] = True
+
+    def walk(stmts):
+        for s in stmts:
+            for attr in ("rhs", "expr", "iterable", "inv"):
+                v = getattr(s, attr, None)
+                if v is not None:
+                    walk_expr(v)
+                    walk_expr(getattr(v, "store", None))
+            for sub in _substmts(s):
+                walk(sub)
+
+    walk(prog.body)
+    return found[0]
+
+
 def _announce_screen(prog):
     """GUI control is a world effect on the user's own machine; say so
     before it happens, the way remote egress is announced."""
@@ -132,6 +155,12 @@ def cmd_run(args):
             print(f"    {a.name} → {a.model} @ {a.host} ({a.backend})")
         print("  (declared in source; your data leaves the machine for "
               "these)")
+        # Worth its own line: a screenshot is whatever happened to be on
+        # the display, which is a different disclosure from a prompt the
+        # program composed.
+        if _screen_observes(prog):
+            print("  ⚠ this program also captures the screen — those "
+                  "screenshots leave the machine for the agents above")
     cert = interp.run()
     print()
     print("── certificate ──────────────────────────────")

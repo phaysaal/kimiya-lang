@@ -14,6 +14,9 @@ import json
 import math
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -101,15 +104,25 @@ class Agent:
             return self.url.rstrip("/")
         if self.backend == "openrouter":
             return "https://openrouter.ai/api/v1"
+        if self.backend in ("anthropic", "claude_cli"):
+            return "https://api.anthropic.com"
         return BASE_URL
 
     @property
     def host(self) -> str:
         u = self.resolved_url
-        return u.split("//", 1)[-1].split("/", 1)[0]
+        host = u.split("//", 1)[-1].split("/", 1)[0]
+        if self.backend == "claude_cli":
+            # The prompt leaves the machine through the CLI rather than
+            # through this process's socket — same egress either way, and
+            # the certificate must say so.
+            return host + " (via claude CLI)"
+        return host
 
     @property
     def is_local(self) -> bool:
+        if self.backend in ("anthropic", "claude_cli"):
+            return False
         return self.host.split(":")[0] in ("127.0.0.1", "localhost")
 
     def label(self) -> str:
@@ -225,7 +238,8 @@ class Oracle:
 
     def complete(self, agent: Agent, prompt: str, system: str = "",
                  temperature: float = 0.2, max_tokens: int = 1024,
-                 images: list | None = None) -> str:
+                 images: list | None = None, schema: dict | None = None,
+                 think: bool = False) -> str:
         if images and not agent.vision:
             raise RuntimeError(
                 f"agent {agent.name} ({agent.model}) was given an image but "
@@ -237,7 +251,91 @@ class Oracle:
         if agent.backend in ("openai", "openrouter"):
             return self._chat(agent, prompt, system, temperature,
                               max_tokens, images)
+        if agent.backend == "anthropic":
+            return self._anthropic(agent, prompt, system, max_tokens,
+                                   images, schema, think)
+        if agent.backend == "claude_cli":
+            return self._claude_cli(agent, prompt, system, images)
         raise RuntimeError(f"unknown backend '{agent.backend}'")
+
+    def _anthropic(self, agent, prompt, system, max_tokens, images,
+                   schema, think):
+        """The Anthropic API through the official SDK.
+
+        Structured outputs are used whenever the caller supplies a schema,
+        so a locate returns valid JSON by construction rather than by
+        regex salvage. Thinking is requested only for judgments — a
+        locate is a perception call, and the datasheet this instrument
+        ships with was measured without it.
+        """
+        try:
+            import anthropic
+        except ImportError:
+            raise RuntimeError(
+                f"agent {agent.name}: backend 'anthropic' needs the SDK — "
+                "`pip install anthropic`. It is the one optional "
+                "dependency; the `claude_cli` backend needs nothing "
+                "installed and no API key.") from None
+        client = anthropic.Anthropic()
+        content = []
+        for p in images or []:
+            content.append({"type": "image", "source": {
+                "type": "base64", "media_type": "image/png",
+                "data": _b64(p)}})
+        content.append({"type": "text", "text": prompt})
+        kwargs = {"model": agent.model, "max_tokens": max_tokens,
+                  "messages": [{"role": "user", "content": content}]}
+        if system:
+            kwargs["system"] = system
+        if think:
+            kwargs["thinking"] = {"type": "adaptive"}
+        if schema:
+            kwargs["output_config"] = {
+                "format": {"type": "json_schema", "schema": schema}}
+        msg = client.messages.create(**kwargs)
+        if msg.stop_reason == "refusal":
+            raise RuntimeError(
+                f"agent {agent.name}: the request was declined "
+                f"({getattr(msg.stop_details, 'category', None)})")
+        return "".join(b.text for b in msg.content if b.type == "text")
+
+    def _claude_cli(self, agent, prompt, system, images):
+        """Headless Claude Code — no API key, no SDK, no dependency.
+
+        The CLI reads the screenshot off disk itself (that is what
+        `--allowedTools Read` is for), so images are passed by path
+        rather than inlined. This is the same path the seenslide GUI
+        harness measured its locator datasheet through, which is why an
+        imported datasheet transfers to it.
+        """
+        exe = shutil.which("claude")
+        if not exe:
+            raise RuntimeError(
+                f"agent {agent.name}: the `claude` CLI is not on PATH. "
+                "Install Claude Code, or use backend = \"anthropic\" with "
+                "ANTHROPIC_API_KEY set.")
+        text = prompt
+        if images:
+            paths = "\n".join(str(p) for p in images)
+            text = (f"Read the image file(s) below, then answer.\n{paths}\n\n"
+                    + prompt)
+        if system:
+            text = system + "\n\n" + text
+        cmd = [exe, "-p", text, "--allowedTools", "Read",
+               "--output-format", "text", "--model", agent.model]
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True,
+                                 timeout=self.timeout,
+                                 cwd=tempfile.gettempdir())
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"agent {agent.name}: claude CLI timed out after "
+                f"{self.timeout}s") from None
+        if out.returncode != 0:
+            raise RuntimeError(
+                f"agent {agent.name}: claude CLI failed: "
+                f"{out.stderr.strip()[:200]}")
+        return out.stdout or ""
 
     def _ollama(self, agent, prompt, system, temperature, max_tokens,
                 images=None):
@@ -300,15 +398,16 @@ class MockOracle(Oracle):
 
     def complete(self, agent: Agent, prompt: str, system: str = "",
                  temperature: float = 0.2, max_tokens: int = 1024,
-                 images: list | None = None) -> str:
+                 images: list | None = None, schema: dict | None = None,
+                 think: bool = False) -> str:
         if "LOCATE" in system:
             if "MOCKMISS" in prompt:
                 return "[]"
             seed = int(h(prompt), 16)
-            x0, y0 = 100 + seed % 700, 100 + (seed >> 12) % 700
-            return json.dumps([{"box_2d": [y0, x0, y0 + 40, x0 + 120],
-                                "label": "mock control",
-                                "confidence": 0.9}])
+            x0, y0 = 100 + seed % 200, 100 + (seed >> 12) % 100
+            return json.dumps({"controls": [
+                {"box": [x0, y0, x0 + 120, y0 + 40],
+                 "label": "mock control", "confidence": 0.9}]})
         if "Answer with exactly YES or NO" in system:
             return "NO" if "MOCKNO" in prompt else "YES"
         m = re.search(r"FIELDS: ([a-z_, ]+)", prompt)
@@ -396,10 +495,13 @@ def run_judge(pool: Pool, oracle: Oracle, trace: Trace, sheets: Datasheets,
     for i, agent in enumerate(panel):
         p = variants[i % len(variants)]
         try:
+            # A vision judgment needs room: an image-capable backend may
+            # think before answering, and 8 tokens would truncate it.
             out = oracle.complete(agent, p, system=JUDGE_SYSTEM,
-                                  temperature=0.1, max_tokens=8,
-                                  images=images)
-            vote = out.strip().upper().startswith("YES")
+                                  temperature=0.1,
+                                  max_tokens=2048 if images else 8,
+                                  images=images, think=bool(images))
+            vote = out.strip().upper().lstrip("*# ").startswith("YES")
             err = None
         except (OSError, RuntimeError) as e:
             vote, err = False, str(e)[:80]

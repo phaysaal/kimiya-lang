@@ -77,11 +77,15 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
         if isinstance(d, A.AgentDecl):
             fk = d.fields
             backend = fk.get("backend", "ollama")
-            if backend not in ("ollama", "openai", "openrouter"):
+            if backend not in ("ollama", "openai", "openrouter",
+                               "anthropic", "claude_cli"):
                 r.err(d.line, f"agent '{d.name}': unknown backend "
                               f"'{backend}'")
             if "model" not in fk:
                 r.err(d.line, f"agent '{d.name}': missing model")
+            if backend in ("anthropic", "claude_cli") and fk.get("url"):
+                r.warn(d.line, f"agent '{d.name}': 'url' is ignored on the "
+                               f"{backend} backend")
             if backend == "openrouter" and "key_env" not in fk:
                 r.warn(d.line, f"agent '{d.name}': openrouter without "
                                "key_env — set key_env to a variable name")

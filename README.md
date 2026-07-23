@@ -11,7 +11,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-Zero dependencies (Python 3.11+ stdlib).
+Zero dependencies (Python 3.11+ stdlib) — the `anthropic` backend is the one optional extra, and the `claude_cli` backend reaches the same models without it.
 
 ## Getting started (first run)
 
@@ -182,10 +182,57 @@ agent C:                              -- OpenRouter
 
 Backends: `ollama` (local unless `url` says otherwise), `openai` (any
 OpenAI-compatible endpoint — vLLM, llama.cpp server, LM Studio, a rented
-pod), `openrouter`. Provider families are inferred for cross-provenance
+pod), `openrouter`, `anthropic`, `claude_cli`. Provider families are inferred for cross-provenance
 panels: `anthropic/…`, `meta-llama/…`, `mistralai/…`, `Qwen/…` all get
 the right family so `judge … panel [B, C]` is checked for J⋪C across
 *providers*, not just local weight families.
+
+### Claude backends: `claude_cli` and `anthropic`
+
+```
+agent L:                          -- headless Claude Code
+    backend = "claude_cli"        -- no API key, no SDK, nothing installed
+    model   = "claude-opus-4-8"
+
+agent V:                          -- the Anthropic API
+    backend = "anthropic"         -- needs ANTHROPIC_API_KEY + `pip install anthropic`
+    model   = "claude-opus-4-8"
+```
+
+Both are vision-capable, so either can drive a `select` over a screenshot
+or sit on a `shows` panel.
+
+`claude_cli` shells out to `claude -p` with `--allowedTools Read`, so the
+CLI opens the screenshot off disk itself rather than the interpreter
+inlining it. It needs no key and keeps the zero-dependency promise —
+**and it is the same path the seenslide GUI harness measured its locator
+datasheet through**, which is what makes an imported β≥.975 a measurement
+of *this* instrument rather than an assertion about a similar one.
+
+`anthropic` is the one optional dependency (`pip install anthropic`).
+It uses **structured outputs** for locates, so a control list comes back
+valid by construction instead of by regex salvage, and requests adaptive
+thinking for `shows` judgments but not for locates — a locate is a
+perception call, and the shipped datasheet was measured without it.
+
+> **Two Claude voters are not a panel.** `family_of` puts every `claude-*`
+> model in the `anthropic` family, so a `shows` panel of two Opus agents
+> is one pair of eyes certifying its own reading — it runs, and it is
+> flagged UNCERTIFIED. `examples/gui_collab.kim` pairs the Opus locator
+> with a Gemini judge for exactly this reason.
+
+**Screenshots are egress too.** A program that captures the screen and
+sends it to a remote agent is disclosing whatever happened to be on the
+display — a different thing from a prompt the program composed. That gets
+its own line before the run:
+
+```
+⚠ network egress: this program sends prompts to remote agents —
+    L → claude-opus-4-8 @ api.anthropic.com (via claude CLI) (claude_cli)
+    J2 → google/gemini-2.5-flash @ openrouter.ai (openrouter)
+  ⚠ this program also captures the screen — those screenshots leave the
+    machine for the agents above
+```
 
 **Keys never appear in source.** `key_env` names an environment variable;
 the interpreter reads it at call time. Nothing secret is ever parsed,
@@ -539,9 +586,14 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
   a screenshot that was never taken.
 - Vision capability is inferred from model-id patterns, which will lag
   new releases; `vision = true` is the override.
-- Boxes are read from the model as 0–1000 normalized coordinates
-  (Gemini-style `box_2d`). A model that answers in pixels will be
-  misread — there is no unit sniffing.
+- Boxes are read as **pixels of the captured image** (`[x0, y0, x1, y1]`),
+  the convention the measured datasheet was collected under. A model that
+  answers in normalized 0–1000 coordinates will be misread — there is no
+  unit sniffing.
+- `claude_cli` latency is ~6–15s per call (p50 ≈ 9s in the harness
+  campaign), so a scenario with a dozen locates takes minutes. There is
+  no coordinate cache in the language yet — every run pays for every
+  locate.
 - `screen.type` text is echoed into the trace (truncated at 200 chars)
   because that is what makes a run auditable — so do not type secrets;
   there is no `key_env` indirection for typed input yet.
