@@ -4,3 +4,4 @@ __pycache__/
 *.html
 examples/*.py
 !examples/pystats.py
+!examples/guiprobe.py

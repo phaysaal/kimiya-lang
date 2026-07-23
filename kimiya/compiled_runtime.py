@@ -15,6 +15,7 @@ import json
 import time
 from pathlib import Path
 
+from . import screen
 from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle,
                       run_judge, run_gen)
 
@@ -52,6 +53,7 @@ class Runtime:
         self.cost = {"gen_calls": 0, "judge_votes": 0, "acts": 0,
                      "observes": 0}
         self.uncertified = 0
+        self.screen_acts = 0
         self.last_gen: Agent | None = None
         self.committed = None
 
@@ -147,8 +149,18 @@ class Runtime:
         return rec
 
     def act(self, surface, action, args):
-        path = Path(_to_str(args[0]))
         self.cost["acts"] += 1
+        if surface == "screen":
+            self.screen_acts += 1
+            try:
+                rec = screen.perform(action, args)
+            except screen.ScreenError as e:
+                raise Bolt(str(e)) from None
+            self.trace.append({"kind": "act", "surface": "screen",
+                               "action": action, "target": screen.target(),
+                               **rec})
+            return
+        path = Path(_to_str(args[0]))
         if action == "create":
             if path.exists():
                 raise Bolt(f"file.create: {path} exists")
@@ -235,6 +247,10 @@ class Runtime:
             "instruments": {t: self.sheets.get(t) for t in tasks},
             "python_extensions": self.py_exts,
             "egress": egress,
+            "screen": ({"driver": screen.driver_name(),
+                        "target": screen.target(),
+                        "acts": self.screen_acts}
+                       if self.screen_acts else None),
             "cost": dict(self.cost), "trace_records": self.trace.count(),
         }
         (self.workspace / "certificate.json").write_text(
@@ -252,6 +268,10 @@ class Runtime:
             print(f"  egress : {', '.join(egress)} (prompts left the machine)")
         else:
             print("  egress : none (all agents local)")
+        if cert["screen"]:
+            sc = cert["screen"]
+            print(f"  screen : {sc['acts']} act(s) via {sc['driver']} "
+                  f"on {sc['target']}")
         c = cert["cost"]
         print(f"  cost   : {c['gen_calls']} gen, {c['judge_votes']} votes, "
               f"{c['acts']} acts, {c['observes']} observes")

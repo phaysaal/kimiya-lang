@@ -1,0 +1,5 @@
+-- K5: the committing click is irreversible and must be gated.
+pool A = "llama3.1:8b"
+
+act screen.click(100, 200)
+act screen.confirm(640, 480)

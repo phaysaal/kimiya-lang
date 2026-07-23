@@ -1,0 +1,6 @@
+-- Screenshots are a later increment; the checker says so rather than
+-- failing at runtime after the program has already clicked things.
+pool A = "llama3.1:8b"
+
+s := observe screen("primary")
+check s.exists

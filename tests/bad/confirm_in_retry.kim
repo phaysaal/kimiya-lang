@@ -1,0 +1,17 @@
+-- K4: a retry may re-fire its body, so an irreversible click cannot live
+-- inside one — no compensation makes a second "Publish" un-happen.
+pool A = "llama3.1:8b"
+pool B = "gemma2:9b"
+
+context k_ok:
+    domain     = "whether a status line reports success"
+    preserve   = [key_status]
+    allow_loss = [theme]
+
+schema Note:
+    text: text
+
+r := retry budget 3 until judge<1,1/1> (r.text |= "published") under k_ok panel [B]:
+    act screen.confirm(640, 480)
+    r := gen<Note>("describe the result") by A
+inv true

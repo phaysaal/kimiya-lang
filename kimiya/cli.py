@@ -16,7 +16,9 @@ import random
 import sys
 from pathlib import Path
 
+from . import ast_nodes as A
 from . import runtime
+from . import screen
 from .runtime import get_oracle, family_of, Datasheets, Trace
 from .parser import ParseError
 from .lexer import LexError
@@ -54,9 +56,47 @@ def _announce_py(py_exts):
             print(f"⚠ python binding: {ext['name']} = {ext['target']}")
 
 
+def _screen_acts(prog):
+    """Every `act screen.…` in the program, bodies and fns included."""
+    from .checker import _substmts
+    found = []
+
+    def walk(stmts):
+        for s in stmts:
+            if isinstance(s, A.ActStmt) and s.surface == "screen":
+                found.append(s)
+            for sub in _substmts(s):
+                walk(sub)
+
+    walk(prog.body)
+    for d in prog.decls:
+        if isinstance(d, A.FnDecl):
+            walk(d.body)
+    return found
+
+
+def _announce_screen(prog):
+    """GUI control is a world effect on the user's own machine; say so
+    before it happens, the way remote egress is announced."""
+    acts = _screen_acts(prog)
+    if not acts:
+        return
+    risky = sum(1 for s in acts if s.action in screen.IRREVERSIBLE)
+    drv = screen.driver_name()
+    print(f"⚠ GUI control: this program synthesizes real input on your "
+          f"display — {len(acts)} screen act(s)"
+          + (f", {risky} irreversible" if risky else ""))
+    if drv == "none":
+        print("    driver: none (acts are recorded, nothing is delivered)")
+    else:
+        print(f"    driver: {drv} on display {screen.display()}   "
+              "(KIMIYA_SCREEN=none records without delivering)")
+
+
 def cmd_check(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
+    _announce_screen(prog)
     rep, tyrep = _analyze(prog, py_funcs)
     for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")
@@ -73,6 +113,7 @@ def cmd_check(args):
 def cmd_run(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
+    _announce_screen(prog)
     rep, tyrep = _analyze(prog, py_funcs)
     for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")
@@ -113,6 +154,10 @@ def cmd_run(args):
               "(prompts left the machine)")
     else:
         print("  egress : none (all agents local)")
+    if cert.get("screen"):
+        sc = cert["screen"]
+        print(f"  screen : {sc['acts']} act(s) via {sc['driver']} "
+              f"on {sc['target']}")
     c = cert["cost"]
     print(f"  cost   : {c['gen_calls']} gen, {c['judge_votes']} votes, "
           f"{c['acts']} acts, {c['observes']} observes, {c['seconds']}s")
@@ -125,6 +170,7 @@ def cmd_run(args):
 def cmd_compile(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
+    _announce_screen(prog)
     rep, tyrep = _analyze(prog, py_funcs)
     for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")

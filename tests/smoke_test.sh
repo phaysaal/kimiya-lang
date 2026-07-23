@@ -29,6 +29,10 @@ declare -A want=(
   [field_on_text]="cannot read field"
   [iterate_text]="cannot iterate a text"
   [select_text]="expected a list"
+  [unguarded_confirm]="irreversible act screen.confirm is unguarded"
+  [confirm_in_retry]="screen.confirm inside a retry body"
+  [screen_arity]="screen.click takes 2 argument(s)"
+  [observe_screen]="observe screen(...) is not implemented"
 )
 for name in "${!want[@]}"; do
   out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)
@@ -48,7 +52,10 @@ rm -f examples/agentic_digest.html
 echo "== mock runs =="
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 cp examples/grounded_summary.kim examples/agentic_digest.kim \
-   examples/data_pipeline.kim examples/textlib.kim examples/pystats.py "$TMP/"
+   examples/data_pipeline.kim examples/textlib.kim examples/pystats.py \
+   examples/gui_publish.kim examples/guiprobe.py "$TMP/"
+printf '{"talk_menu_x":300,"talk_menu_y":180,"publish_x":1180,"publish_y":740}' > "$TMP/locators.json"
+printf '{"talks":[{"name":"Release notes","published":true}],"status_banner":"Release notes is live"}' > "$TMP/app_state.json"
 printf 'The project deadline is Friday.\nBudget unchanged.\nDeadline moved from Monday to Friday by the sponsor.\n' > "$TMP/notes.txt"
 printf 'Meeting moved to 3pm.\nInvoice 42 paid.\nServer restarted twice.\n' > "$TMP/inbox.txt"
 printf '12\n15\n11\n90\n13\n14\n12\n' > "$TMP/latencies.txt"
@@ -66,6 +73,26 @@ grep -q "p95=90" <<<"$out" || { echo "FAIL: pystats math wrong"; echo "$out"; ex
 test -f reading.txt || { echo "FAIL: reading.txt not written"; exit 1; }
 grep -q "^- n=" reading.txt || { echo "FAIL: bulletize (module fn) output"; exit 1; }
 
+echo "== screen surface: acts recorded, nothing delivered =="
+# KIMIYA_MOCK already implies driver=none, but be explicit: this test must
+# never be able to touch a real cursor.
+gout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none python3 -m kimiya run gui_publish.kim)
+grep -q "COMMITTED" <<<"$gout" || { echo "FAIL: gui_publish"; echo "$gout"; exit 1; }
+grep -q "GUI control" <<<"$gout" \
+  || { echo "FAIL: screen acts not announced"; exit 1; }
+grep -q "1 irreversible" <<<"$gout" \
+  || { echo "FAIL: irreversible screen act not counted"; exit 1; }
+grep -q "screen : 4 act(s) via none" <<<"$gout" \
+  || { echo "FAIL: certificate omits the screen line"; echo "$gout"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: screen acts missing from trace"; exit 1; }
+import json, sys
+acts = [json.loads(l) for l in open(".kimiya/trace.jsonl")]
+acts = [a for a in acts if a.get("surface") == "screen"]
+assert len(acts) == 4, acts
+assert [a["action"] for a in acts] == ["click", "type", "key", "confirm"], acts
+assert all(a["delivered"] is False for a in acts), acts
+PY
+
 echo "== compile: emit standalone python and run it =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gs.py >/dev/null
 KIMIYA_MOCK=1 python3 gs.py | grep -q "COMMITTED" \
@@ -74,4 +101,9 @@ KIMIYA_MOCK=1 python3 -m kimiya compile data_pipeline.kim --out dp.py >/dev/null
 cout=$(KIMIYA_MOCK=1 python3 dp.py)
 grep -q "COMMITTED" <<<"$cout" || { echo "FAIL: compiled data_pipeline"; exit 1; }
 grep -q "p95=90" <<<"$cout" || { echo "FAIL: compiled pystats math"; exit 1; }
+KIMIYA_MOCK=1 python3 -m kimiya compile gui_publish.kim --out gp.py >/dev/null
+gcout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none python3 gp.py)
+grep -q "COMMITTED" <<<"$gcout" || { echo "FAIL: compiled gui_publish"; exit 1; }
+grep -q "screen : 4 act(s)" <<<"$gcout" \
+  || { echo "FAIL: compiled certificate omits screen"; echo "$gcout"; exit 1; }
 echo "SMOKE TEST PASS"

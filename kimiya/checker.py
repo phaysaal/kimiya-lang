@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from . import ast_nodes as A
+from . import screen
 from .runtime import family_of
 
 BUILTIN_SCHEMAS = {"Text", "Json"}
@@ -25,10 +26,17 @@ BUILTIN_FUNCS = {
     "str", "num", "hash", "now", "range", "first", "last", "keys",
     "file_exists", "map", "filter", "sort_by", "sum",
 }
-DEFAULT_IRREVERSIBLE = {("file", "overwrite"), ("file", "delete")}
+DEFAULT_IRREVERSIBLE = {("file", "overwrite"), ("file", "delete")} | \
+    {("screen", a) for a in screen.IRREVERSIBLE}
 KNOWN_ACTIONS = {("file", "create"), ("file", "append"),
                  ("file", "overwrite"), ("file", "delete"),
-                 ("file", "mkdir")}
+                 ("file", "mkdir")} | \
+    {("screen", a) for a in screen.ACTIONS}
+# action -> arity, for the surfaces that fix one. `file` actions vary
+# (mkdir takes 1, append takes 2), so only `screen` is pinned here.
+ACTION_ARITY = {("screen", a): n for a, n in screen.ACTIONS.items()}
+KNOWN_SURFACES = {"file", "screen"}
+OBSERVE_SURFACES = {"file"}  # `observe screen(...)` is a later increment
 
 
 def _substmts(s) -> list[list]:
@@ -135,7 +143,12 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             for _, x in e.fields:
                 chk_expr(x)
         elif isinstance(e, A.ObserveExpr):
-            if e.surface != "file":
+            if e.surface == "screen":
+                r.err(e.line, "observe screen(...) is not implemented — the "
+                              "screen surface supports acts only; read world "
+                              "state through a kernel oracle (use python) or "
+                              "observe file(...)")
+            elif e.surface not in OBSERVE_SURFACES:
                 r.err(e.line, f"unknown observe surface '{e.surface}'")
             for a in e.args:
                 chk_expr(a)
@@ -247,8 +260,16 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             chk_retry(s)
         elif isinstance(s, A.ActStmt):
             key = (s.surface, s.action)
-            if key not in KNOWN_ACTIONS and key not in irreversible:
+            if s.surface not in KNOWN_SURFACES:
+                r.err(s.line, f"unknown act surface '{s.surface}' "
+                              f"(known: {', '.join(sorted(KNOWN_SURFACES))})")
+            elif key not in KNOWN_ACTIONS and key not in irreversible:
                 r.err(s.line, f"unknown action {s.surface}.{s.action}")
+            elif key in ACTION_ARITY and len(s.args) != ACTION_ARITY[key]:
+                r.err(s.line,
+                      f"{s.surface}.{s.action} takes "
+                      f"{ACTION_ARITY[key]} argument(s), "
+                      f"got {len(s.args)}")
             for a in s.args:
                 chk_expr(a)
             if key in irreversible:

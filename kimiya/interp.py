@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from . import ast_nodes as A
+from . import screen
 from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle, run_judge,
                       run_gen)
 
@@ -102,6 +103,7 @@ class Interp:
         self.last_gen_model: Agent | None = None
         self.last_act: dict[str, float] = {}
         self.last_obs: dict[str, float] = {}
+        self.screen_acts = 0
         self.committed = None
 
     # ------------------------------------------------ purpose text
@@ -147,6 +149,10 @@ class Interp:
                        for a in self.pool.agents],
             "egress": sorted({a.host for a in self.pool.agents
                               if not a.is_local}),
+            "screen": ({"driver": screen.driver_name(),
+                        "target": screen.target(),
+                        "acts": self.screen_acts}
+                       if self.screen_acts else None),
             "cost": dict(self.cost, seconds=round(secs, 1)),
             "trace_records": self.trace.count(),
         }
@@ -321,17 +327,31 @@ class Interp:
     # ------------------------------------------------ world
     def exec_act(self, s: A.ActStmt):
         args = [self.eval(a) for a in s.args]
+        self.cost["acts"] += 1
+        if s.surface == "screen":
+            return self.act_screen(s, args)
+        if s.surface != "file":
+            raise KimiyaRuntimeError(f"unknown surface {s.surface}")
+        return self.act_file(s, args)
+
+    def act_screen(self, s: A.ActStmt, args: list):
+        self.check_freshness(screen.target(), s.line)
+        try:
+            rec = screen.perform(s.action, args)
+        except screen.ScreenError as e:
+            raise KimiyaRuntimeError(f"line {s.line}: {e}") from None
+        self.last_act[screen.target()] = time.time()
+        self.screen_acts += 1
+        self.trace.append({"kind": "act", "surface": "screen",
+                           "action": s.action, "target": screen.target(),
+                           "line": s.line, **rec})
+
+    def act_file(self, s: A.ActStmt, args: list):
         if not args:
             raise KimiyaRuntimeError(
                 f"line {s.line}: act needs a path argument")
         path = Path(str(args[0]))
-        self.cost["acts"] += 1
-        if path and str(path) in self.last_obs and \
-                self.last_obs[str(path)] < self.last_act.get(str(path), -1):
-            self.trace.append({"kind": "freshness_warning",
-                               "path": str(path), "line": s.line})
-        if s.surface != "file":
-            raise KimiyaRuntimeError(f"unknown surface {s.surface}")
+        self.check_freshness(str(path), s.line)
         if s.action == "create":
             if path.exists():
                 raise Bolt(f"file.create: {path} already exists "
@@ -352,6 +372,14 @@ class Interp:
         self.trace.append({"kind": "act", "surface": s.surface,
                            "action": s.action, "path": str(path),
                            "line": s.line})
+
+    def check_freshness(self, key: str, line: int):
+        """Warn when a program acts on a world it observed before its own
+        last act on that same world (a stale read)."""
+        if key in self.last_obs and \
+                self.last_obs[key] < self.last_act.get(key, -1):
+            self.trace.append({"kind": "freshness_warning",
+                               "path": key, "line": line})
 
     def exec_settle(self, s: A.SettleStmt):
         deadline = time.time() + s.within

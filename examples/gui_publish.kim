@@ -1,0 +1,49 @@
+-- Driving a GUI as an audited world effect (screen surface, increment 1).
+--
+-- The shape of a real GUI test: click through a flow, then commit only
+-- through gates. Coordinates come from a locator file rather than from a
+-- vision model — a vision-backed `select` is a later increment, and
+-- inventing certainty for one now would be exactly the overclaim the
+-- certificate exists to prevent.
+--
+-- Run it without touching your cursor:  KIMIYA_SCREEN=none kimiya run …
+
+pool A = "llama3.1:8b"
+pool B = "gemma2:9b"
+pool C = "mistral:7b"
+
+use python "guiprobe.py"
+
+context k_state:
+    domain     = "whether captured app state shows a described outcome"
+    preserve   = [key_text, key_status]
+    allow_loss = [timestamps, theme, unrelated_windows]
+
+-- The world enters only through observe (and kernel oracles).
+coords := observe file("locators.json")
+check coords.exists
+
+-- Navigate: recoverable clicks need no gate.
+act screen.click(at(coords.text, "talk_menu_x"), at(coords.text, "talk_menu_y"))
+act screen.type("Release notes")
+act screen.key("Return")
+
+-- Wait for the app to reach the state, on a kernel oracle.
+settle until check row_count("talks", "Release notes") == 1 within 10
+
+-- The committing click is irreversible, so K5 demands a gate first.
+check row_count("talks", "Release notes") == 1
+act screen.confirm(at(coords.text, "publish_x"), at(coords.text, "publish_y"))
+
+settle until check published("Release notes") within 20
+
+-- Verdict: kernel gate at certainty 1, then a judged gate on what the
+-- user can actually see.
+banner := status_text()
+if check(published("Release notes")):
+    if judge<3,2/3> (banner |= "the talk is published and visible") under k_state panel [B, C]:
+        commit(banner)
+    else:
+        abstain
+else:
+    abstain

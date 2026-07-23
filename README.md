@@ -6,7 +6,9 @@ and action with language models (the KimiyaPOPL paper) — including the
 retry). Programs run against a pool of agents — **local by default**
 (Ollama at `127.0.0.1`), or remote (a vast.ai pod, OpenRouter) when
 declared, with every network egress announced and audited. Programs can
-read and write files, and every run ends in an explicit outcome: a
+read and write files and drive a GUI (the `screen` surface), with every
+world effect announced and audited, and every run ends in an explicit
+outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
 Zero dependencies (Python 3.11+ stdlib).
@@ -108,7 +110,8 @@ runs both and checks they commit with the same result.
 
 Environment: `KIMIYA_OLLAMA_PORT` (default 11434), `KIMIYA_TIMEOUT`
 (seconds per model call), `KIMIYA_MOCK=1` (offline deterministic oracle,
-used by the test suite).
+used by the test suite), `KIMIYA_SCREEN` (`xdotool` | `none` — see the
+screen surface below).
 
 ## A complete program
 
@@ -214,6 +217,70 @@ File actions and their effect classes: `file.create` / `file.append` /
 (**irreversible**). Classes can be re-declared:
 `effect file.append irreversible`.
 
+### The `screen` surface — driving a GUI
+
+```
+act screen.click(x, y)               -- navigate, open, focus  (recoverable)
+act screen.type("Release notes")
+act screen.key("Return")             -- keysym or chord: "ctrl+a"
+act screen.drag(x1, y1, x2, y2)
+act screen.scroll(x, y, ticks)       -- negative ticks scroll up
+
+check row_count("talks", name) == 1  -- the verified gate...
+act screen.confirm(x, y)             -- ...for the click that commits
+```
+
+GUI input is a world effect, so it belongs in `act` — which is the whole
+point: K4 (no irreversible act in a retry), K5 (no unguarded irreversible
+act) and K6 (no unframed world effect in a retry body) then apply to
+clicking exactly as they do to files. See `examples/gui_publish.kim`.
+
+**Why two clicking actions.** Irreversibility is a property of the
+control, not the coordinates: whether clicking (900, 412) can be undone
+depends on whether that pixel says "Cancel" or "Delete forever", and the
+language cannot know which. Classifying *every* click as irreversible
+would make K5 unusable noise. So the surface splits clicking in two and
+the program states its own claim — `screen.click` recoverable,
+`screen.confirm` irreversible — and a reviewer sees that claim in the
+source. Override in the usual way when a program knows better:
+`effect screen.confirm recoverable`.
+
+**Delivery is verified, not assumed.** `xdotool` synthesizes events at
+the X server, so the application cannot distinguish them from a human.
+But a multi-monitor X screen is a *bounding box, not a union*: an
+L-shaped layout leaves uncovered regions, and X silently clamps a pointer
+sent there to the nearest valid pixel — the click lands somewhere the
+program never named while the trace records what it asked for. Every
+move is therefore read back before any button is pressed, and a
+divergence is an error, not a warning:
+
+```
+✗ pointer did not reach (640, 480) — it is at (1920, 480). That
+  coordinate is outside every connected monitor …
+```
+
+**Screen acts are announced**, like network egress, before the program
+runs — GUI control is an effect on the user's own machine:
+
+```
+⚠ GUI control: this program synthesizes real input on your display —
+    4 screen act(s), 1 irreversible
+    driver: xdotool on display :0   (KIMIYA_SCREEN=none records without delivering)
+```
+
+and the certificate carries `screen: 4 act(s) via xdotool on screen::0`.
+
+Drivers: `KIMIYA_SCREEN=xdotool` (default) delivers; `KIMIYA_SCREEN=none`
+records the acts and delivers nothing. `KIMIYA_MOCK=1` implies `none`, so
+the test suite can never touch a real cursor.
+
+**Do not smuggle clicks through a Python extension.** `pyfn click =
+"gui.click"` would run, but `pyfn` is declared **kernel-grade, certainty
+1**, and K4/K5/K6 only inspect `act` statements — every effect hidden
+that way escapes the irreversibility discipline while the certificate
+goes on claiming certainty for the path. Python is the kernel extension
+mechanism for deterministic computation; effects go through `act`.
+
 ## The checker IS the paper's discipline
 
 `kimiya check` rejects, before any model runs:
@@ -223,7 +290,7 @@ File actions and their effect classes: `file.create` / `file.append` /
 | K1 | a judged relation citing no declared purpose (silent semantic equality) |
 | K2 | a retry whose judge panel shares the generator's model family (J ⋪ C) |
 | K3 | `select` with recall outside (0,1] — coverage claims need a stated recall |
-| K4 | an **irreversible act inside a retry body** |
+| K4 | an **irreversible act inside a retry body** (`file.delete`, `screen.confirm`) |
 | K5 | an **unguarded irreversible act** (no check/judged gate before it) |
 | K6 | a retry whose body touches the world with **no `inv`/`compensate`** — snapshot retry over an external world is unsound |
 | K7–K9 | undeclared schemas/names, non-positive budgets and deadlines |
@@ -354,8 +421,23 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
   paper — which is exactly why K6 forbids unframed world effects).
 - Freshness is tracked per file path and violations are trace warnings,
   not type errors (the paper's full obligation needs taint analysis).
-- One surface (`file`). Sockets, processes, and clipboard are future
-  surfaces; each will need its own effect classes and delivery contracts.
+- Two surfaces (`file`, `screen`). Sockets, processes, and clipboard are
+  future surfaces; each will need its own effect classes and delivery
+  contracts.
+- The `screen` surface is **acts only**. There is no `observe
+  screen(...)` (screenshots) and no vision-backed `select`, so a program
+  gets its coordinates from a locator file or a kernel oracle rather than
+  by looking. The checker says so at check time instead of failing at
+  runtime after the program has already clicked things.
+- `screen.type` text is echoed into the trace (truncated at 200 chars)
+  because that is what makes a run auditable — so do not type secrets;
+  there is no `key_env` indirection for typed input yet.
+- Effect classes are per action name, not per call site: declaring
+  `effect screen.click irreversible` gates *every* click in the program.
+  Use `screen.confirm` for the ones that commit.
+- xdotool drives X11. Under Wayland it cannot synthesize input to native
+  clients; run the app in an Xorg session or an Xwayland-backed nested
+  server.
 - `case` and store invariants elaborate away in the paper; here, spell
   them as nested `if`.
 

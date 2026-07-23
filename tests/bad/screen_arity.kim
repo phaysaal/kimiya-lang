@@ -1,0 +1,4 @@
+-- Arity is fixed per screen action: a click is (x, y), not (x).
+pool A = "llama3.1:8b"
+
+act screen.click(100)
