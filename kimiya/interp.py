@@ -27,6 +27,7 @@ from pathlib import Path
 from . import ast_nodes as A
 from . import screen
 from . import vision
+from ._version import __version__ as KIMIYA_VERSION
 from .runtime import (Pool, Agent, Trace, Datasheets, MemoStore,
                       get_oracle, run_judge, resolve_params, run_gen)
 
@@ -210,6 +211,7 @@ class Interp:
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
             "params": dict(self.cli_params),
+            "kimiya_version": KIMIYA_VERSION,
             "memo_hits": self.memo_hits,
             "explored": self.theta_excluded,
             "cost": dict(self.cost, seconds=round(secs, 1)),

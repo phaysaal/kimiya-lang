@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import screen
 from . import vision
+from ._version import __version__ as KIMIYA_VERSION
 from .runtime import (Pool, Agent, Trace, Datasheets, MemoStore,
                       get_oracle, run_judge, run_gen, resolve_params)
 
@@ -442,6 +443,7 @@ class Runtime:
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
             "params": self.params,
+            "kimiya_version": KIMIYA_VERSION,
             "memo_hits": self.memo_hits,
             "explored": self.theta_excluded,
             "cost": dict(self.cost), "trace_records": self.trace.count(),
@@ -492,6 +494,7 @@ class Runtime:
         for note in cert["overclaims"]:
             print(f"  ⚠ {note}")
         c = cert["cost"]
+        print(f"  kimiya : v{KIMIYA_VERSION}")
         print(f"  cost   : {c['gen_calls']} gen, {c['judge_votes']} votes, "
               f"{c['acts']} acts, {c['observes']} observes")
         print("─────────────────────────────────────────────")

@@ -11,6 +11,14 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
+**Version: 1.3.1 (pre-stable).** MAJOR.MINOR.PATCH; until 2.0 the
+language surface may change between MINOR versions. Every certificate
+records the version that produced it (`kimiya : v1.3.1`), so a run is
+always attributable to a language state. Designed independently — the
+core is a program logic machine-checked in Coq; each extension (screen,
+vision, actors, params, explore/memo) was added out of necessity for a
+concrete capability, not adopted from another framework.
+
 Zero dependencies (Python 3.11+ stdlib) — the `anthropic` backend is the one optional extra, and the `claude_cli` backend reaches the same models without it.
 
 ## Getting started (first run)

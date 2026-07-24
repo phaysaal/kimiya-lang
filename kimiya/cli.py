@@ -255,6 +255,7 @@ def cmd_run(args):
     c = cert["cost"]
     print(f"  cost   : {c['gen_calls']} gen, {c['judge_votes']} votes, "
           f"{c['acts']} acts, {c['observes']} observes, {c['seconds']}s")
+    print(f"  kimiya : v{cert.get('kimiya_version', '?')}")
     print(f"  trace  : {cert['trace_records']} records "
           f"({Path(args.file).parent / '.kimiya' / 'trace.jsonl'})")
     print("─────────────────────────────────────────────")
@@ -384,6 +385,9 @@ def cmd_datasheet(args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="kimiya", description=__doc__)
+    from . import __version__
+    p.add_argument("--version", action="version",
+                   version=f"kimiya {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
     cp = sub.add_parser("check")
     cp.add_argument("file")
