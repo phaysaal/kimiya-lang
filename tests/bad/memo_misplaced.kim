@@ -1,0 +1,5 @@
+-- memo applies to instrument readings (gen, judge) only.
+pool A = "llama3.1:8b"
+
+x := memo select<0.9>("q", ["a", "b"])
+commit(x)

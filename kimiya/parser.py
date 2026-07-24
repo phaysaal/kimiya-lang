@@ -344,6 +344,11 @@ class Parser:
             self.end_stmt()
             return A.ActStmt(surface, action, args, actor=actor,
                              line=t.line)
+        if self.at_kw("explore"):
+            self.next()
+            self.expect("OP", ":")
+            body = self.block()
+            return A.ExploreStmt(body, t.line)
         if self.at_kw("settle"):
             self.next()
             actor = self.actor_index()
@@ -398,6 +403,16 @@ class Parser:
     # ------------- rhs / guards -------------
     def rhs(self):
         t = self.peek()
+        if self.at_kw("memo"):
+            self.next()
+            if not self.at_kw("gen"):
+                raise ParseError(
+                    f"line {t.line}: `memo` applies to gen (and, in "
+                    "guards, judge) — nothing else is an instrument "
+                    "reading worth reusing")
+            g = self.rhs()
+            g.memo = True
+            return g
         if self.at_kw("gen"):
             self.next()
             self.expect("OP", "<")
@@ -410,7 +425,7 @@ class Parser:
             if self.at_kw("by"):
                 self.next()
                 by = self.expect("NAME").value
-            return A.GenExpr(schema, prompt, by, t.line)
+            return A.GenExpr(schema, prompt, by, line=t.line)
         if self.at_kw("select"):
             self.next()
             self.expect("OP", "<")
@@ -447,6 +462,14 @@ class Parser:
         if self.at_kw("check"):
             self.next()
             return A.CheckGuard(self.expr(), t.line)
+        if self.at_kw("memo"):
+            self.next()
+            if not self.at_kw("judge"):
+                raise ParseError(
+                    f"line {t.line}: `memo` in a guard applies to judge")
+            g = self.guard()
+            g.memo = True
+            return g
         if self.at_kw("judge"):
             self.next()
             self.expect("OP", "<")
@@ -495,7 +518,7 @@ class Parser:
                 self.next()
                 paras = int(float(self.expect("NUMBER").value))
             return A.JudgeGuard(k, tau, relation, left, right, ctx,
-                                panel, paras, t.line)
+                                panel, paras, line=t.line)
         raise ParseError(f"line {t.line}: expected check or judge guard")
 
     def actor_index(self):

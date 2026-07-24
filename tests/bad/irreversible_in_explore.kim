@@ -1,0 +1,6 @@
+-- K14: an unaccounted judgment must not justify an unrecoverable effect.
+pool A = "llama3.1:8b"
+
+explore:
+    check 1 > 0
+    act screen.confirm(100, 200)

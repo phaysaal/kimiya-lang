@@ -43,6 +43,8 @@ declare -A want=(
   [param_bad_default]="is not a num"
   [param_dup]="duplicate param"
   [param_bad_type]="unknown type"
+  [commit_in_explore]="commit inside explore"
+  [irreversible_in_explore]="inside explore"
 )
 for name in "${!want[@]}"; do
   out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)
@@ -269,6 +271,59 @@ grep -q '"hi Ada; hi Ada; hi Ada; "' <<<"$cpout" \
   || { echo "FAIL: compiled param values"; echo "$cpout"; exit 1; }
 grep -q "params : name='Ada'" <<<"$cpout" \
   || { echo "FAIL: compiled params line"; echo "$cpout"; exit 1; }
+
+echo "== memo + explore: reuse counted once, exploration excluded =="
+out=$(python3 -m kimiya check "$OLDPWD_REPO/tests/bad/memo_misplaced.kim" 2>&1 || true)
+grep -q "applies to gen" <<<"$out" \
+  || { echo "FAIL: memo_misplaced not rejected"; echo "$out"; exit 1; }
+cat > srch.kim <<'KIM'
+pool A = "llama3.1:8b"
+pool B = "gemma2:9b"
+pool C = "mistral:7b"
+context k_q:
+    domain     = "whether a candidate slogan is catchy"
+    preserve   = [tone]
+    allow_loss = [length]
+best := ""
+explore:
+    forall i in range(4):
+        c := gen<Text>("slogan variant " + str(i)) by A
+        if judge<3,2/3> (c |= "catchy") under k_q panel [B, C]:
+            best := c
+check len(best) > 0
+if memo judge<3,2/3> (best |= "catchy") under k_q panel [B, C]:
+    if memo judge<3,2/3> (best |= "catchy") under k_q panel [B, C]:
+        commit(best)
+    else:
+        abstain
+else:
+    abstain
+KIM
+rm -f .kimiya/memo.json
+sout=$(KIMIYA_MOCK=1 python3 -m kimiya run srch.kim)
+grep -q "COMMITTED" <<<"$sout" || { echo "FAIL: srch"; echo "$sout"; exit 1; }
+grep -q "explored : 4" <<<"$sout" \
+  || { echo "FAIL: exploration not excluded"; echo "$sout"; exit 1; }
+grep -q "memo   : 1 reuse" <<<"$sout" \
+  || { echo "FAIL: memo reuse not counted"; echo "$sout"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: theta factor counted more than once"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+assert len(c["theta_factors"]) == 1, c["theta_factors"]
+assert c["theta"] == 0.6, c["theta"]
+assert c["explored"] == 4 and c["memo_hits"] == 1, c
+PY
+# compiled: identical accounting, plus cross-run memo persistence
+KIMIYA_MOCK=1 python3 -m kimiya compile srch.kim --out srch.py >/dev/null
+rm -f .kimiya/memo.json
+c1=$(KIMIYA_MOCK=1 python3 srch.py)
+grep -q "memo   : 1 reuse" <<<"$c1" \
+  || { echo "FAIL: compiled memo"; echo "$c1"; exit 1; }
+c2=$(KIMIYA_MOCK=1 python3 srch.py)
+grep -q "memo   : 2 reuse" <<<"$c2" \
+  || { echo "FAIL: cross-run memo persistence"; echo "$c2"; exit 1; }
+grep -q "12 votes" <<<"$c2" \
+  || { echo "FAIL: cross-run memo did not save votes"; echo "$c2"; exit 1; }
 
 echo "== compile: emit standalone python and run it =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gs.py >/dev/null

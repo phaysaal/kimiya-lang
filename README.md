@@ -156,6 +156,55 @@ instruments start **prior-grade** and tighten as you label judgments with
 `calibrate`. Judgments without a cross-provenance panel run but are
 flagged UNCERTIFIED (self-judgment never certifies).
 
+## Search: `explore` and `memo`
+
+Two constructs make heuristic search — greedy, DP-style reuse,
+evolutionary loops — *warrantable* rather than merely writable.
+
+```
+best := ""
+explore:                                  -- search freely: factors here are
+    forall i in range(20):                -- trace-recorded, excluded from θ
+        c := gen<Text>("variant " + str(i)) by A
+        if judge<3,2/3> (c |= goal) under k panel [B, C]:
+            best := c
+
+check len(best) > 0                       -- the verdict runs OUTSIDE, live
+if memo judge<5,4/5> (best |= goal) under k panel [B, C]:
+    commit(best)
+```
+
+**`explore:`** — a search region whose judged/select factors are excluded
+from the reliability invoice. Exploration gates *progress*, never the
+*verdict*: whatever the block finds must be re-established by the gates
+outside it, so exploration error converts to wasted budget, not
+certificate weakness — the same rule `retry` already applies to its
+failed rounds, generalized to any search shape. Without it, twenty
+judged candidates at β≥0.97 would crush θ to 0.54 before the answer was
+even examined. The checker enforces the boundary (K14): no `commit` and
+no irreversible act inside `explore` — a verdict must not rest on
+unaccounted judgments. (Values still flow out; they are untrusted until
+the outside gates warrant them, like every Kimiya value.)
+
+**`memo`** — exact-input reuse of an instrument reading, opt-in on `gen`
+and `judge`. Same epistemics as the locate cache's exact-SHA hit:
+identical input, identical reading, so reuse is free in cost and — the
+part that matters — **a reading's θ factor enters the invoice once per
+run**, at its first use on the verdict path, no matter how many times it
+is consulted. That makes memoized recursion an *epistemic* optimization,
+not just a computational one: the DP-style program ends with a stronger
+certificate than the naive one, because fewer independent readings back
+it. Persisted in `.kimiya/memo.json`; keyed by everything that could
+change the answer (schema/task, full input text, panel, k, τ).
+
+Two honest notes. `memo gen` makes sampling deterministic per prompt —
+exactly why it is opt-in; an evolutionary loop that *wants* diversity
+must not memoize its mutations. And `memo judge` treats identical
+re-asks as one reading, which matches the measured reality (same-input
+retries of the same instrument are highly correlated, not independent
+votes) — amplification comes from `judge<k,τ>`'s panel, not from asking
+twice.
+
 ## Parameters: a program's typed interface
 
 ```
@@ -621,16 +670,17 @@ decl     := pool NAME = STRING
 stmt     := NAME := rhs | check E | print E | commit(E) | abstain
           | if GUARD: BLOCK [else: BLOCK]
           | forall NAME in E: BLOCK
+          | explore: BLOCK
           | retry budget N until GUARD: BLOCK [inv E] [compensate: BLOCK]
           | act[<ACTOR>] SURFACE.ACTION(args)
           | settle[<ACTOR>] until GUARD within SECONDS
-rhs      := gen<SCHEMA>(E) [by POOL]
+rhs      := [memo] gen<SCHEMA>(E) [by POOL]
           | select<RECALL>(E, E) [under CTX]
           | observe file(E)
           | retry ...            -- value = body's last assignment
           | E
 GUARD    := check E
-          | judge<K,TAU> (E |= E | E ~ E | E contradicts E) under CTX
+          | [memo] judge<K,TAU> (E |= E | E ~ E | E contradicts E) under CTX
             [panel [P,...]] [paraphrase_prompts N]
           | judge<K,TAU> shows(E, E) under CTX [panel [P,...]]
 rhs      := ... | select<RECALL>(E, E) [under CTX] [by POOL]

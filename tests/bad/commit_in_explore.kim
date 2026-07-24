@@ -1,0 +1,6 @@
+-- K14: exploration's factors are excluded from θ, so a verdict inside
+-- explore would rest on unaccounted judgments.
+pool A = "llama3.1:8b"
+
+explore:
+    commit("found it")

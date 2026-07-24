@@ -76,7 +76,7 @@ class Compiler:
         panel = json.dumps(g.panel) if g.panel else "None"
         return (f"lambda: rt.judge({g.k}, {g.tau}, {g.relation!r}, "
                 f"{self.expr(g.left)}, {right}, {g.context!r}, {panel}, "
-                f"{g.paraphrases})")
+                f"{g.paraphrases}, memo={g.memo})")
 
     # ---------------- statements ----------------
     def stmts(self, body):
@@ -121,6 +121,16 @@ class Compiler:
             args = ", ".join(self.expr(a) for a in s.args)
             self.emit(f"rt.act({s.surface!r}, {s.action!r}, [{args}], "
                       f"{s.actor!r})")
+        elif isinstance(s, A.ExploreStmt):
+            self.emit("rt.explore_push()")
+            self.emit("try:")
+            self.indent += 1
+            self.stmts(s.body)
+            self.indent -= 1
+            self.emit("finally:")
+            self.indent += 1
+            self.emit("rt.explore_pop()")
+            self.indent -= 1
         elif isinstance(s, A.SettleStmt):
             self.emit(f"rt.settle({self.guard_lambda(s.guard)}, "
                       f"{s.within}, {s.line})")
@@ -130,7 +140,8 @@ class Compiler:
     def rhs(self, rhs, name):
         if isinstance(rhs, A.GenExpr):
             by = repr(rhs.by) if rhs.by else "None"
-            return (f"rt.gen({rhs.schema!r}, {self.expr(rhs.prompt)}, {by})")
+            return (f"rt.gen({rhs.schema!r}, {self.expr(rhs.prompt)}, {by}, "
+                    f"memo={rhs.memo})")
         if isinstance(rhs, A.SelectExpr):
             ctx = repr(rhs.context) if rhs.context else "None"
             by = repr(rhs.by) if rhs.by else "None"

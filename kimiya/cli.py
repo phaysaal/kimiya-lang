@@ -218,6 +218,13 @@ def cmd_run(args):
               "(prompts left the machine)")
     else:
         print("  egress : none (all agents local)")
+    if cert.get("memo_hits"):
+        print(f"  memo   : {cert['memo_hits']} reuse(s) — identical "
+              "readings, factors counted once")
+    if cert.get("explored"):
+        print(f"  ⚑ explored : {cert['explored']} judged/select factor(s) "
+              "inside explore — trace-recorded, excluded from θ; the "
+              "verdict rests only on the gates outside")
     if cert.get("params"):
         shown = ", ".join(f"{k}={v!r}" for k, v in cert["params"].items())
         print(f"  params : {shown}")

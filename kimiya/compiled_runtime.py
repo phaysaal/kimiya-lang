@@ -18,8 +18,8 @@ from pathlib import Path
 
 from . import screen
 from . import vision
-from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle,
-                      run_judge, run_gen, resolve_params)
+from .runtime import (Pool, Agent, Trace, Datasheets, MemoStore,
+                      get_oracle, run_judge, run_gen, resolve_params)
 
 
 class Bolt(Exception):
@@ -73,6 +73,11 @@ class Runtime:
             monitor=d.get("monitor")) for d in (displays or [])}
         self.default_display = screen.Display()
         self.params = dict(params or {})
+        self.memo = MemoStore(self.workspace)
+        self.memo_counted: set = set()
+        self.memo_hits = 0
+        self.explore_depth = 0
+        self.theta_excluded = 0
         self.oracle = get_oracle()
         self.contexts = contexts        # name -> purpose text
         self.schemas = schemas          # name -> [field, ...]
@@ -102,23 +107,51 @@ class Runtime:
         self.last_gen: Agent | None = None
         self.committed = None
 
+    def add_theta(self, name, factor):
+        if self.explore_depth > 0:
+            self.theta_excluded += 1
+            self.trace.append({"kind": "theta_excluded", "task": name,
+                               "factor": round(factor, 4)})
+        else:
+            self.theta.append((name, factor))
+
+    def explore_push(self):
+        self.explore_depth += 1
+        self.trace.append({"kind": "explore", "phase": "enter"})
+
+    def explore_pop(self):
+        self.explore_depth -= 1
+        self.trace.append({"kind": "explore", "phase": "exit"})
+
     def register(self, fns: dict, py_funcs: dict):
         self.fns = fns
         self.py_funcs = py_funcs
 
     # ---- primitive operations (mirror the interpreter) ----
-    def gen(self, schema: str, prompt: str, by: str | None):
+    def gen(self, schema: str, prompt: str, by: str | None, memo=False):
         agent = self.pool.agent(by) if by else self.pool.default_generator()
         self.last_gen = agent
+        prompt = _to_str(prompt)
+        if memo:
+            key = MemoStore.key("gen", schema, prompt, agent.label())
+            ent = self.memo.get(key)
+            if ent is not None:
+                self.memo_hits += 1
+                self.trace.append({"kind": "gen", "cache": "memo",
+                                   "agent": ent.get("agent", "")})
+                return ent["value"]
         self.cost["gen_calls"] += 1
         if schema == "Text":
-            return run_gen(self.oracle, self.trace, agent, prompt, None)
-        if schema == "Json":
-            r = run_gen(self.oracle, self.trace, agent,
-                        prompt + "\n\nFIELDS: result", ["result"])
-            return r
-        fields = self.schemas[schema]
-        return run_gen(self.oracle, self.trace, agent, prompt, fields)
+            out = run_gen(self.oracle, self.trace, agent, prompt, None)
+        elif schema == "Json":
+            out = run_gen(self.oracle, self.trace, agent,
+                          prompt + "\n\nFIELDS: result", ["result"])
+        else:
+            out = run_gen(self.oracle, self.trace, agent, prompt,
+                          self.schemas[schema])
+        if memo and out is not None:
+            self.memo.put(key, {"value": out, "agent": agent.label()})
+        return out
 
     def select(self, recall: float, query: str, store, ctx, by=None):
         if isinstance(store, dict) and store.get("kind") == "screen":
@@ -131,7 +164,7 @@ class Runtime:
 
         hits = [x for x in sorted(store, key=lambda x: -score(x))
                 if score(x) > 0] or list(store)
-        self.theta.append((f"select<{recall}>", recall))
+        self.add_theta(f"select<{recall}>", recall)
         self.trace.append({"kind": "select", "recall": recall,
                            "store_size": len(store), "hits": len(hits)})
         return hits
@@ -156,9 +189,9 @@ class Runtime:
             self.locates_cached += 1
         elif source == "replay":
             self.locates_replayed += 1
-        self.theta.append((task if hits else f"neg:{task}",
-                           sheet["beta_lo"] if hits
-                           else 1 - sheet["alpha_hi"]))
+        self.add_theta(task if hits else f"neg:{task}",
+                       sheet["beta_lo"] if hits
+                       else 1 - sheet["alpha_hi"])
         if recall > sheet["beta_lo"]:
             note = (f"declared recall {recall} exceeds the measured "
                     f"β≥{sheet['beta_lo']:.3f} of instrument {task} — θ "
@@ -171,7 +204,7 @@ class Runtime:
         return hits
 
     def judge(self, k, tau, relation, left, right, ctx_name,
-              panel, paraphrases):
+              panel, paraphrases, memo=False):
         purpose = self.contexts.get(ctx_name, ctx_name)
         task = f"{relation}:{ctx_name}"
         images = None
@@ -190,7 +223,7 @@ class Runtime:
                         f"{shot['y']}), sha {shot['sha']}")
             claim = f"The screenshot shows: {_to_str(right)}"
             return self._run_judge(k, tau, task, claim, evidence, purpose,
-                                   panel, paraphrases, images)
+                                   panel, paraphrases, images, memo)
         left, right = _to_str(left), _to_str(right) if right is not None else ""
         if relation == "entails":
             evidence, claim = left, f"The evidence supports: {right}"
@@ -203,10 +236,25 @@ class Runtime:
         else:
             evidence, claim = left, f"The value satisfies: {purpose}"
         return self._run_judge(k, tau, task, claim, evidence, purpose,
-                               panel, paraphrases)
+                               panel, paraphrases, None, memo)
 
     def _run_judge(self, k, tau, task, claim, evidence, purpose, panel,
-                   paraphrases, images=None):
+                   paraphrases, images=None, memo=False):
+        memo_key = None
+        if memo:
+            memo_key = MemoStore.key("judge", task, claim, evidence,
+                                     k, tau, ",".join(panel or []))
+            ent = self.memo.get(memo_key)
+            if ent is not None:
+                self.memo_hits += 1
+                self.trace.append({"kind": "judge", "cache": "memo",
+                                   "task": task,
+                                   "verdict": ent["verdict"]})
+                if memo_key not in self.memo_counted:
+                    if self.explore_depth == 0:
+                        self.memo_counted.add(memo_key)
+                    self.add_theta(ent["factor_name"], ent["factor"])
+                return ent["verdict"]
         gen = self.last_gen or self.pool.default_generator()
         j = run_judge(self.pool, self.oracle, self.trace, self.sheets,
                       task, claim, evidence, gen, k, tau, purpose,
@@ -215,9 +263,16 @@ class Runtime:
         if not j.certified:
             self.uncertified += 1
         sheet = self.sheets.get(task)
-        self.theta.append((task if j.verdict else f"neg:{task}",
-                           sheet["beta_lo"] if j.verdict
-                           else 1 - sheet["alpha_hi"]))
+        name = task if j.verdict else f"neg:{task}"
+        factor = (sheet["beta_lo"] if j.verdict
+                  else 1 - sheet["alpha_hi"])
+        self.add_theta(name, factor)
+        if memo_key is not None:
+            self.memo.put(memo_key, {"verdict": j.verdict,
+                                     "factor_name": name,
+                                     "factor": factor})
+            if self.explore_depth == 0:
+                self.memo_counted.add(memo_key)
         return j.verdict
 
     def check(self, value, line=0):
@@ -231,6 +286,9 @@ class Runtime:
         return bool(value)
 
     def commit(self, value):
+        if self.explore_depth > 0:
+            raise Bolt("commit while exploring — judged factors here are "
+                       "excluded from θ; commit outside the explore block")
         self.committed = value
         self.trace.append({"kind": "commit"})
 
@@ -384,6 +442,8 @@ class Runtime:
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
             "params": self.params,
+            "memo_hits": self.memo_hits,
+            "explored": self.theta_excluded,
             "cost": dict(self.cost), "trace_records": self.trace.count(),
         }
         (self.workspace / "certificate.json").write_text(
@@ -404,6 +464,12 @@ class Runtime:
         if self.params:
             shown = ", ".join(f"{k}={v!r}" for k, v in self.params.items())
             print(f"  params : {shown}")
+        if self.memo_hits:
+            print(f"  memo   : {self.memo_hits} reuse(s) — identical "
+                  "readings, factors counted once")
+        if self.theta_excluded:
+            print(f"  ⚑ explored : {self.theta_excluded} judged/select "
+                  "factor(s) inside explore — excluded from θ")
         if cert["screen"]:
             sc = cert["screen"]
             line = (f"  screen : {sc['acts']} act(s) via {sc['driver']} "

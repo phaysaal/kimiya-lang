@@ -320,6 +320,9 @@ def typecheck(prog: A.Program) -> TypeReport:
         elif isinstance(s, A.ActStmt):
             for a in s.args:
                 ty(a, env)
+        elif isinstance(s, A.ExploreStmt):
+            for st in s.body:
+                check_stmt(st, env)
         elif isinstance(s, A.SettleStmt):
             check_guard(s.guard, env)
 

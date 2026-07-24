@@ -200,6 +200,37 @@ class Datasheets:
         return self._sheets
 
 
+class MemoStore:
+    """Exact-input reuse of instrument readings (`memo gen` / `memo judge`).
+
+    A memoized reading is the same epistemics as the locate cache's
+    exact-SHA hit: identical input, identical reading. Reuse is free in
+    cost and — for judgments — its θ factor is counted ONCE per run, at
+    the reading's first use on the verdict path. Persisted per workspace,
+    keyed by a hash of everything that could change the answer.
+    """
+
+    def __init__(self, workspace: Path):
+        self.path = Path(workspace) / "memo.json"
+        self._d: dict = {}
+        if self.path.exists():
+            try:
+                self._d = json.loads(self.path.read_text())
+            except (json.JSONDecodeError, OSError):
+                self._d = {}
+
+    @staticmethod
+    def key(kind: str, *parts) -> str:
+        return kind + ":" + h("\x1f".join(str(p) for p in parts))
+
+    def get(self, k: str):
+        return self._d.get(k)
+
+    def put(self, k: str, entry: dict):
+        self._d[k] = dict(entry, ts=time.time())
+        self.path.write_text(json.dumps(self._d, indent=2))
+
+
 class Trace:
     def __init__(self, workspace: Path):
         self.path = Path(workspace) / "trace.jsonl"

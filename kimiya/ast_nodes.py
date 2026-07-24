@@ -93,6 +93,7 @@ class JudgeGuard:
     context: str
     panel: list | None    # pool names, or None for default
     paraphrases: int
+    memo: bool = False    # exact-input reuse: one reading, counted once
     line: int = 0
 
 
@@ -174,6 +175,7 @@ class GenExpr:
     schema: str
     prompt: object
     by: str | None
+    memo: bool = False    # exact-input reuse: same prompt -> same artifact
     line: int = 0
 
 
@@ -244,6 +246,20 @@ class ActStmt:
     actor: str | None = None    # `act<A> screen...` — a declared display
     line: int = 0
     gated_by_if: bool = False   # set by the checker's verified-gate pass
+
+
+@dataclass
+class ExploreStmt:
+    """`explore:` — a search region whose judged/select factors are
+    trace-recorded but excluded from θ. Exploration gates progress, never
+    the verdict: anything the block finds must be re-established by the
+    gates outside it, so its instrument error converts to wasted budget,
+    not certificate weakness. The checker forbids commit and irreversible
+    acts inside (K14) — a verdict cannot rest on unaccounted judgments.
+    """
+
+    body: list
+    line: int = 0
 
 
 @dataclass

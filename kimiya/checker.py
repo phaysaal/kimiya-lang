@@ -44,6 +44,8 @@ def _substmts(s) -> list[list]:
         return [s.then] + ([s.els] if s.els else [])
     if isinstance(s, A.ForallStmt):
         return [s.body]
+    if isinstance(s, A.ExploreStmt):
+        return [s.body]
     if isinstance(s, A.RetryStmt):
         return [s.body] + ([s.compensate] if s.compensate else [])
     if isinstance(s, A.Assign) and isinstance(s.rhs, A.RetryStmt):
@@ -394,11 +396,39 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                           "unguarded — precede it with a check, or place "
                           "it first in a checked/judged if-branch (the "
                           "verified gate)")
+        elif isinstance(s, A.ExploreStmt):
+            chk_explore(s)
         elif isinstance(s, A.SettleStmt):
             chk_actor(s.actor, s.line, "settle")
             chk_guard(s.guard, None)
             if s.within <= 0:
                 r.err(s.line, "settle deadline must be positive")
+
+    def chk_explore(s: A.ExploreStmt):
+        """K14: exploration is free precisely because it carries no
+        authority — so nothing inside may commit, and nothing inside may
+        change the world irreversibly. A verdict cannot rest on
+        unaccounted judgments."""
+        def walk(stmts):
+            for st in stmts:
+                if isinstance(st, A.CommitStmt):
+                    r.err(st.line,
+                          "commit inside explore — exploration's judged "
+                          "factors are excluded from θ, so a verdict here "
+                          "would rest on unaccounted judgments; commit "
+                          "outside the explore block, behind live gates")
+                if isinstance(st, A.ActStmt):
+                    key = (st.surface, st.action)
+                    if key in irreversible:
+                        r.err(st.line,
+                              f"irreversible act {st.surface}.{st.action} "
+                              "inside explore — an unaccounted judgment "
+                              "must not justify an effect that cannot be "
+                              "taken back")
+                for sub in _substmts(st):
+                    walk(sub)
+        walk(s.body)
+        chk_stmts(s.body, in_retry=False)
 
     def chk_retry(s: A.RetryStmt):
         if s.budget <= 0:

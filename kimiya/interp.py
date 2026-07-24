@@ -27,8 +27,8 @@ from pathlib import Path
 from . import ast_nodes as A
 from . import screen
 from . import vision
-from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle, run_judge, resolve_params,
-                      run_gen)
+from .runtime import (Pool, Agent, Trace, Datasheets, MemoStore,
+                      get_oracle, run_judge, resolve_params, run_gen)
 
 
 class Bolt(Exception):
@@ -76,6 +76,11 @@ class Interp:
         self.trace = Trace(self.workspace)
         self.sheets = Datasheets(self.workspace)
         self.locate_cache = vision.LocateCache(self.workspace)
+        self.memo = MemoStore(self.workspace)
+        self.memo_counted: set[str] = set()   # per-run: factor entered θ
+        self.memo_hits = 0
+        self.explore_depth = 0
+        self.theta_excluded = 0               # factors gated by explore
         self.replay = replay or os.environ.get("KIMIYA_REPLAY") == "1"
         self.oracle = get_oracle()
         # Resolve declared params against the caller's pairs BEFORE
@@ -131,6 +136,18 @@ class Interp:
         self.locates_replayed = 0    # replay hits: pixels changed, disclosed
         self.overclaims: list[str] = []
         self.committed = None
+
+    def add_theta(self, name: str, factor: float):
+        """One door for reliability factors. Inside `explore`, a factor
+        is trace-recorded but excluded from θ — exploration gates
+        progress, never the verdict (the same rule retry applies to its
+        failed rounds)."""
+        if self.explore_depth > 0:
+            self.theta_excluded += 1
+            self.trace.append({"kind": "theta_excluded", "task": name,
+                               "factor": round(factor, 4)})
+        else:
+            self.theta.append((name, factor))
 
     # ------------------------------------------------ purpose text
     def purpose_text(self, name: str | None) -> str:
@@ -193,6 +210,8 @@ class Interp:
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
             "params": dict(self.cli_params),
+            "memo_hits": self.memo_hits,
+            "explored": self.theta_excluded,
             "cost": dict(self.cost, seconds=round(secs, 1)),
             "trace_records": self.trace.count(),
         }
@@ -214,6 +233,11 @@ class Interp:
         elif isinstance(s, A.PrintStmt):
             print(self.to_str(self.eval(s.expr)))
         elif isinstance(s, A.CommitStmt):
+            if self.explore_depth > 0:
+                raise KimiyaRuntimeError(
+                    f"line {s.line}: commit while exploring — the judged "
+                    "factors here are excluded from θ, so this verdict "
+                    "would rest on unaccounted judgments")
             self.committed = self.eval(s.expr)
             self.trace.append({"kind": "commit", "line": s.line})
         elif isinstance(s, A.AbstainStmt):
@@ -234,6 +258,16 @@ class Interp:
             self.exec_retry(s)
         elif isinstance(s, A.ActStmt):
             self.exec_act(s)
+        elif isinstance(s, A.ExploreStmt):
+            self.explore_depth += 1
+            self.trace.append({"kind": "explore", "line": s.line,
+                               "phase": "enter"})
+            try:
+                self.exec_stmts(s.body)
+            finally:
+                self.explore_depth -= 1
+                self.trace.append({"kind": "explore", "line": s.line,
+                                   "phase": "exit"})
         elif isinstance(s, A.SettleStmt):
             self.exec_settle(s)
         else:
@@ -261,12 +295,24 @@ class Interp:
             fields = []
         else:
             fields = [f for f, _ in self.schemas[g.schema].fields]
+        if g.memo:
+            key = MemoStore.key("gen", g.schema, prompt, agent.label())
+            ent = self.memo.get(key)
+            if ent is not None:
+                self.memo_hits += 1
+                self.trace.append({"kind": "gen", "cache": "memo",
+                                   "agent": ent.get("agent", ""),
+                                   "line": g.line})
+                return ent["value"]
         self.cost["gen_calls"] += 1
         if fields == []:
             out = run_gen(self.oracle, self.trace, agent,
                           prompt + "\n\nFIELDS: result", ["result"])
-            return out
-        return run_gen(self.oracle, self.trace, agent, prompt, fields)
+        else:
+            out = run_gen(self.oracle, self.trace, agent, prompt, fields)
+        if g.memo and out is not None:
+            self.memo.put(key, {"value": out, "agent": agent.label()})
+        return out
 
     def eval_select(self, sel: A.SelectExpr):
         store_val = self.eval(sel.store)
@@ -282,7 +328,7 @@ class Interp:
 
         hits = [x for x in sorted(store, key=lambda x: -score(x))
                 if score(x) > 0] or list(store)
-        self.theta.append((f"select<{sel.recall}>", sel.recall))
+        self.add_theta(f"select<{sel.recall}>", sel.recall)
         self.trace.append({"kind": "select", "recall": sel.recall,
                            "store_size": len(store), "hits": len(hits),
                            "line": sel.line})
@@ -320,9 +366,9 @@ class Interp:
         elif source == "replay":
             self.locates_replayed += 1
         if hits:
-            self.theta.append((task, sheet["beta_lo"]))
+            self.add_theta(task, sheet["beta_lo"])
         else:
-            self.theta.append((f"neg:{task}", 1 - sheet["alpha_hi"]))
+            self.add_theta(f"neg:{task}", 1 - sheet["alpha_hi"])
         if sel.recall > sheet["beta_lo"]:
             note = (f"line {sel.line}: declared recall {sel.recall} exceeds "
                     f"the measured β≥{sheet['beta_lo']:.3f} of instrument "
@@ -378,6 +424,25 @@ class Interp:
         return self.run_guard(g, task, claim, evidence, purpose)
 
     def run_guard(self, g, task, claim, evidence, purpose, images=None):
+        memo_key = None
+        if getattr(g, "memo", False):
+            memo_key = MemoStore.key(
+                "judge", task, claim, evidence, g.k, g.tau,
+                ",".join(g.panel or []))
+            ent = self.memo.get(memo_key)
+            if ent is not None:
+                # Same reading, consulted again: free, and its factor
+                # enters θ at most once per run.
+                self.memo_hits += 1
+                self.trace.append({"kind": "judge", "cache": "memo",
+                                   "task": task,
+                                   "verdict": ent["verdict"],
+                                   "line": g.line})
+                if memo_key not in self.memo_counted:
+                    if self.explore_depth == 0:
+                        self.memo_counted.add(memo_key)
+                    self.add_theta(ent["factor_name"], ent["factor"])
+                return ent["verdict"]
         generator = self.last_gen_model or self.pool.default_generator()
         j = run_judge(self.pool, self.oracle, self.trace, self.sheets,
                       task, claim, evidence, generator, g.k, g.tau,
@@ -386,10 +451,16 @@ class Interp:
         if not j.certified:
             self.uncertified += 1
         sheet = self.sheets.get(task)
-        if j.verdict:
-            self.theta.append((task, sheet["beta_lo"]))
-        else:
-            self.theta.append((f"neg:{task}", 1 - sheet["alpha_hi"]))
+        name = task if j.verdict else f"neg:{task}"
+        factor = (sheet["beta_lo"] if j.verdict
+                  else 1 - sheet["alpha_hi"])
+        self.add_theta(name, factor)
+        if memo_key is not None:
+            self.memo.put(memo_key, {"verdict": j.verdict,
+                                     "factor_name": name,
+                                     "factor": factor})
+            if self.explore_depth == 0:
+                self.memo_counted.add(memo_key)
         return j.verdict
 
     # ------------------------------------------------ retry
