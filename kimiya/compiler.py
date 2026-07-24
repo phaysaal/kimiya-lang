@@ -187,12 +187,17 @@ class Compiler:
     def compile(self) -> str:
         agents = []
         displays = []
+        params = []
         contexts = {}
         schemas = {}
         fns = []
         pyfns = []
         for d in self.prog.decls:
-            if isinstance(d, A.DisplayDecl):
+            if isinstance(d, A.ParamDecl):
+                params.append({"name": d.name, "type": d.type,
+                               "default": d.default,
+                               "required": d.required})
+            elif isinstance(d, A.DisplayDecl):
                 displays.append({"name": d.name, **d.fields})
             elif isinstance(d, A.PoolDecl):
                 agents.append({"name": d.name, "model": d.model})
@@ -216,12 +221,13 @@ class Compiler:
         self.emit("import sys")
         self.emit("import importlib, importlib.util")
         self.emit("from kimiya.compiled_runtime import Runtime, Bolt, "
-                  "_to_str, _pyify")
+                  "_to_str, _pyify, parse_cli")
         self.emit()
         # repr, not json.dumps: agent fields may be booleans (vision), and
         # JSON's `true` is not Python.
         self.emit(f"_AGENTS = {agents!r}")
         self.emit(f"_DISPLAYS = {displays!r}")
+        self.emit(f"_PARAMS = {params!r}")
         self.emit(f"_CONTEXTS = {json.dumps(contexts)}")
         self.emit(f"_SCHEMAS = {json.dumps(schemas)}")
         self.emit(f"_PY_EXTS = {json.dumps(self.py_exts)}")
@@ -279,10 +285,9 @@ class Compiler:
         self.emit("def main():")
         self.indent += 1
         self.emit("global rt")
-        self.emit("models = sys.argv[1].split(',') if len(sys.argv) > 1 "
-                  "else None")
+        self.emit("models, params = parse_cli(sys.argv[1:], _PARAMS)")
         self.emit(f"rt = Runtime(__file__, _AGENTS, _CONTEXTS, _SCHEMAS, "
-                  f"_PY_EXTS, models, displays=_DISPLAYS)")
+                  f"_PY_EXTS, models, displays=_DISPLAYS, params=params)")
         self.emit("_load_py(rt)")
         fnmap = ("{" + ", ".join(f"{f.name!r}: _fn_{f.name}"
                                  for f in fns) + "}")
@@ -296,7 +301,7 @@ class Compiler:
         self.emit("for a in remote:")
         self.emit("    print(f'⚠ egress: {a.name} → {a.model} @ "
                   "{a.host} ({a.backend})')")
-        self.emit("env = {}")
+        self.emit("env = dict(params)")
         self.emit("try:")
         self.indent += 1
         self.stmts(self.prog.body)

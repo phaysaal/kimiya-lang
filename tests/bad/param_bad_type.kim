@@ -1,0 +1,6 @@
+-- Param types are text | num | bool; anything else is rejected.
+pool A = "llama3.1:8b"
+
+param blob: json = "x"
+
+commit(blob)

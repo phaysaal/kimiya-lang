@@ -28,7 +28,7 @@
     },
     {
       "name": "keyword.control.kimiya",
-      "match": "\\b(pool|agent|context|schema|effect|domain|preserve|allow_loss|gen|select|judge|check|retry|until|budget|panel|paraphrase_prompts|under|by|if|then|else|forall|in|commit|abstain|print|contradicts|irreversible|recoverable|fn|return|use|pyfn|python)\\b"
+      "match": "\\b(pool|param|agent|context|schema|effect|domain|preserve|allow_loss|gen|select|judge|check|retry|until|budget|panel|paraphrase_prompts|under|by|if|then|else|forall|in|commit|abstain|print|contradicts|irreversible|recoverable|fn|return|use|pyfn|python)\\b"
     },
     {
       "name": "constant.language.kimiya",

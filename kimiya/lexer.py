@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 KEYWORDS = {
     "pool", "context", "schema", "effect", "domain", "preserve", "allow_loss",
+    "param",
     "gen", "select", "judge", "check", "retry", "until", "budget", "panel",
     "paraphrase_prompts", "under", "by", "if", "then", "else", "forall", "in",
     "commit", "abstain", "print", "true", "false", "null", "and", "or", "not",

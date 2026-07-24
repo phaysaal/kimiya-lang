@@ -141,6 +141,13 @@ def cmd_check(args):
         n = len(prog.body)
         print(f"✓ {args.file}: {len(prog.decls)} declarations, "
               f"{n} top-level statements, discipline + type checks pass")
+        pdecls = [d for d in prog.decls if isinstance(d, A.ParamDecl)]
+        if pdecls:
+            bits = [f"{d.name} ({d.type}"
+                    + ("" if d.required else f" = {d.default!r}") + ")"
+                    + (" required" if d.required else "")
+                    for d in pdecls]
+            print("  params: " + "; ".join(bits))
         return 0
     return 1
 
@@ -157,9 +164,19 @@ def cmd_run(args):
             print(f"✗ {e}")
         sys.exit("refusing to run an ill-formed program")
     models = args.models.split(",") if args.models else None
-    interp = Interp(prog, Path(args.file), models,
-                    py_funcs=py_funcs, py_exts=py_exts,
-                    replay=getattr(args, "replay", False))
+    pairs = {}
+    for a in getattr(args, "params", []) or []:
+        if "=" not in a:
+            sys.exit(f"bad parameter {a!r} — expected name=value")
+        k, v = a.split("=", 1)
+        pairs[k] = v
+    try:
+        interp = Interp(prog, Path(args.file), models,
+                        py_funcs=py_funcs, py_exts=py_exts,
+                        replay=getattr(args, "replay", False),
+                        params=pairs)
+    except ValueError as e:
+        sys.exit(f"refusing to run: {e}")
     if interp.replay:
         print("▶ replay: cached locates will be reused without a model "
               "call; judges and kernel gates still run live")
@@ -201,6 +218,9 @@ def cmd_run(args):
               "(prompts left the machine)")
     else:
         print("  egress : none (all agents local)")
+    if cert.get("params"):
+        shown = ", ".join(f"{k}={v!r}" for k, v in cert["params"].items())
+        print(f"  params : {shown}")
     if cert.get("screen"):
         sc = cert["screen"]
         line = (f"  screen : {sc['acts']} act(s) via {sc['driver']} "
@@ -250,8 +270,8 @@ def cmd_compile(args):
     out = Path(args.out) if args.out else Path(args.file).with_suffix(".py")
     out.write_text(code)
     print(f"✓ compiled → {out}")
-    print(f"  run it with:  python {out}"
-          "   (or: python {out} model1,model2,...)")
+    print(f"  run it with:  python {out} [name=value ...] "
+          "[--models m1,m2]")
     return 0
 
 
@@ -364,6 +384,8 @@ def main(argv=None):
     rp.add_argument("file")
     rp.add_argument("--models", help="comma-separated ollama models "
                     "(overrides pool declarations)")
+    rp.add_argument("params", nargs="*", metavar="name=value",
+                    help="program parameters (declared with `param`)")
     rp.add_argument("--replay", action="store_true",
                     help="reuse cached locates even though the screen has "
                     "changed (zero locate model calls; judges still run "

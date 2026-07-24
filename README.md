@@ -156,6 +156,44 @@ instruments start **prior-grade** and tighten as you label judgments with
 `calibrate`. Judgments without a cross-provenance panel run but are
 flagged UNCERTIFIED (self-judgment never certifies).
 
+## Parameters: a program's typed interface
+
+```
+param name: text                 -- required: no default
+param times: num = 2             -- optional
+param live: bool = false
+
+kimiya run greet.kim name=Ada times=3        # interpreter
+python greet.py name=Ada times=3             # compiled artifact — same contract
+```
+
+`param` declares what a program takes, typed and checked before anything
+runs: a missing required param, an unknown `name=value` pair, or an
+uncoercible value refuses the run **while refusal is still free** — no
+model has been consulted. Bool accepts `true/false/1/0/yes/no/on/off`.
+The resolved values are recorded in the certificate (`params : name='Ada',
+times=3.0`), because an auditable run must say what inputs produced it —
+which also means **don't pass secrets as params**; they land in the
+certificate JSON. Defaults are literals only (string, number,
+true/false).
+
+**Why a declaration, not an argv read.** `param` is deliberately
+backend-neutral: the program never touches a raw argument list. The
+interpreter maps the declared table to `name=value` pairs; `kimiya
+compile` emits the same table (`_PARAMS`) and the same contract into the
+Python artifact; an embedding host skips the command line entirely and
+passes a dict (`Interp(..., params={"name": "Ada"})`). A future compiler
+targeting another language — or a native binary — maps the identical
+table to its own CLI or FFI. The language spec stays the same; only the
+last-mile mapping is per-backend, which is what makes generating
+different compilers (and eventually compiling to a standalone binary)
+possible without touching programs.
+
+`--models m1,m2` remains separate on both surfaces: models are the
+*instruments*, params are the *inputs*. (Compiled artifacts previously
+took a bare positional model list; that spelling is replaced by
+`--models`.)
+
 ## Agents: local, vast.ai pods, and OpenRouter
 
 A **pool member is an agent** — a declared model instance with a backend,
@@ -575,6 +613,7 @@ into instant compile errors.
 ```
 program  := (decl | stmt)*
 decl     := pool NAME = STRING
+          | param NAME: (text|num|bool) [= literal]
           | display NAME: (x11|ssh|monitor = STRING)*
           | context NAME: (domain|preserve|allow_loss = ...)+
           | schema NAME: (field: type)+

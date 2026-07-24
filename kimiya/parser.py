@@ -87,7 +87,7 @@ class Parser:
         self.skip_newlines()
         while not self.at("EOF"):
             if self.at_kw("pool", "context", "schema", "effect", "fn",
-                          "use", "pyfn", "agent", "display"):
+                          "use", "pyfn", "agent", "display", "param"):
                 prog.decls.append(self.decl())
             else:
                 prog.body.append(self.stmt())
@@ -104,6 +104,37 @@ class Parser:
             model = self.expect("STRING").value
             self.expect("NEWLINE")
             return A.PoolDecl(name, model, t.line)
+        if self.at_kw("param"):
+            self.next()
+            name = self.expect("NAME").value
+            self.expect("OP", ":")
+            ptype = self.expect("NAME").value
+            default, required = None, True
+            if self.at("OP", "="):
+                self.next()
+                required = False
+                neg = False
+                if self.at("OP", "-"):
+                    self.next()
+                    neg = True
+                t2 = self.peek()
+                if t2.kind == "NUMBER":
+                    default = float(self.next().value)
+                    if neg:
+                        default = -default
+                elif neg:
+                    raise ParseError(f"line {t2.line}: '-' must be followed "
+                                     "by a number in a param default")
+                elif t2.kind == "STRING":
+                    default = self.next().value
+                elif self.at_kw("true") or self.at_kw("false"):
+                    default = self.next().value == "true"
+                else:
+                    raise ParseError(
+                        f"line {t2.line}: param default must be a string, "
+                        "number, or true/false literal")
+            self.expect("NEWLINE")
+            return A.ParamDecl(name, ptype, default, required, t.line)
         if self.at_kw("display"):
             self.next()
             name = self.expect("NAME").value

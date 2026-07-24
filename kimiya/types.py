@@ -148,6 +148,9 @@ class TypeReport:
 
 def typecheck(prog: A.Program) -> TypeReport:
     r = TypeReport()
+    param_env = {d.name: {"text": TEXT, "num": NUM, "bool": BOOL}
+                 .get(d.type, UNKNOWN)
+                 for d in prog.decls if isinstance(d, A.ParamDecl)}
     schemas: dict[str, RecordTy] = {}
     for d in prog.decls:
         if isinstance(d, A.SchemaDecl):
@@ -327,7 +330,7 @@ def typecheck(prog: A.Program) -> TypeReport:
             for st in d.body:
                 check_stmt(st, fenv)
 
-    top_env: dict[str, Ty] = {}
+    top_env: dict[str, Ty] = dict(param_env)
     for st in prog.body:
         check_stmt(st, top_env)
     return r

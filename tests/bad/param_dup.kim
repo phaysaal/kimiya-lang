@@ -1,0 +1,7 @@
+-- Duplicate params collide loudly, like every other declaration.
+pool A = "llama3.1:8b"
+
+param name: text = "a"
+param name: text = "b"
+
+commit(name)

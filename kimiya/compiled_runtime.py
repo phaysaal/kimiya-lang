@@ -19,7 +19,7 @@ from pathlib import Path
 from . import screen
 from . import vision
 from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle,
-                      run_judge, run_gen)
+                      run_judge, run_gen, resolve_params)
 
 
 class Bolt(Exception):
@@ -28,9 +28,40 @@ class Bolt(Exception):
         self.reason = reason
 
 
+def parse_cli(argv, param_table):
+    """The compiled artifact's CLI contract, shared with `kimiya run`:
+    positional `name=value` pairs for declared params, `--models m1,m2`
+    to override the pool. Errors exit before any model runs."""
+    import sys as _sys
+    models, pairs = None, {}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--models":
+            i += 1
+            if i >= len(argv):
+                _sys.exit("--models needs a comma-separated list")
+            models = argv[i].split(",")
+        elif a.startswith("--models="):
+            models = a.split("=", 1)[1].split(",")
+        elif "=" in a and not a.startswith("-"):
+            k, v = a.split("=", 1)
+            pairs[k] = v
+        else:
+            _sys.exit(f"unknown argument {a!r} — expected name=value "
+                      "pairs or --models m1,m2")
+        i += 1
+    try:
+        resolved = resolve_params(param_table, pairs)
+    except ValueError as e:
+        _sys.exit(f"refusing to run: {e}")
+    return models, resolved
+
+
 class Runtime:
     def __init__(self, source_file: str, agents, contexts, schemas,
-                 py_exts=None, models_override=None, displays=None):
+                 py_exts=None, models_override=None, displays=None,
+                 params=None):
         self.workspace = Path(source_file).parent / ".kimiya"
         self.workspace.mkdir(exist_ok=True)
         self.trace = Trace(self.workspace)
@@ -41,6 +72,7 @@ class Runtime:
             name=d["name"], x11=d.get("x11"), ssh=d.get("ssh"),
             monitor=d.get("monitor")) for d in (displays or [])}
         self.default_display = screen.Display()
+        self.params = dict(params or {})
         self.oracle = get_oracle()
         self.contexts = contexts        # name -> purpose text
         self.schemas = schemas          # name -> [field, ...]
@@ -351,6 +383,7 @@ class Runtime:
                                    for n, d in self.displays.items()}}
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
+            "params": self.params,
             "cost": dict(self.cost), "trace_records": self.trace.count(),
         }
         (self.workspace / "certificate.json").write_text(
@@ -368,6 +401,9 @@ class Runtime:
             print(f"  egress : {', '.join(egress)} (prompts left the machine)")
         else:
             print("  egress : none (all agents local)")
+        if self.params:
+            shown = ", ".join(f"{k}={v!r}" for k, v in self.params.items())
+            print(f"  params : {shown}")
         if cert["screen"]:
             sc = cert["screen"]
             line = (f"  screen : {sc['acts']} act(s) via {sc['driver']} "

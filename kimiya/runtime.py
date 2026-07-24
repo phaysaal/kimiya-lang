@@ -218,6 +218,64 @@ class Trace:
                    if line.strip())
 
 
+PARAM_TYPES = ("text", "num", "bool")
+
+
+def resolve_params(table: list[dict], pairs: dict) -> dict:
+    """Resolve CLI/embedding inputs against a program's param table.
+
+    `table` rows: {"name", "type", "default", "required"} — the shape every
+    backend compiler emits. `pairs` maps name -> raw value (strings from a
+    command line; already-typed values from an embedding host). Raises
+    ValueError with a user-facing message; nothing model-related has run
+    by then, so refusal is free.
+    """
+    declared = {row["name"]: row for row in table}
+    for name in pairs:
+        if name not in declared:
+            known = ", ".join(sorted(declared)) or "none"
+            raise ValueError(
+                f"unknown parameter {name!r} — this program declares: "
+                f"{known}")
+    out = {}
+    for row in table:
+        name, ptype = row["name"], row["type"]
+        if name in pairs:
+            out[name] = _coerce_param(name, ptype, pairs[name])
+        elif row.get("required"):
+            raise ValueError(
+                f"required parameter {name!r} ({ptype}) was not given — "
+                f"pass it as {name}=<value>")
+        else:
+            out[name] = row.get("default")
+    return out
+
+
+def _coerce_param(name: str, ptype: str, value):
+    if ptype == "text":
+        return value if isinstance(value, str) else str(value)
+    if ptype == "num":
+        if isinstance(value, bool):
+            raise ValueError(f"parameter {name!r} expects a number")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"parameter {name!r} expects a number, got {value!r}") \
+                from None
+    if ptype == "bool":
+        if isinstance(value, bool):
+            return value
+        v = str(value).strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off"):
+            return False
+        raise ValueError(
+            f"parameter {name!r} expects true/false, got {value!r}")
+    raise ValueError(f"parameter {name!r}: unknown type {ptype!r}")
+
+
 def h(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
 

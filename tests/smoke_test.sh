@@ -40,6 +40,9 @@ declare -A want=(
   [blind_claude_url]="unknown backend"
   [undeclared_actor]="not a declared display"
   [actor_on_file]="screen surface only"
+  [param_bad_default]="is not a num"
+  [param_dup]="duplicate param"
+  [param_bad_type]="unknown type"
 )
 for name in "${!want[@]}"; do
   out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)
@@ -231,6 +234,41 @@ echo "== observe screen: no fixture, no invented screenshot =="
 nout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none python3 -m kimiya run gui_collab.kim || true)
 grep -q "ABSTAINED" <<<"$nout" \
   || { echo "FAIL: ran without a screenshot"; echo "$nout"; exit 1; }
+
+echo "== params: typed interface, refusal before any model =="
+cat > greet.kim <<'KIM'
+param name: text
+param times: num = 2
+pool A = "llama3.1:8b"
+out := ""
+forall i in range(times):
+    out := out + "hi " + name + "; "
+check len(out) > 0
+commit(out)
+KIM
+python3 -m kimiya check greet.kim | grep -q "name (text) required" \
+  || { echo "FAIL: param summary"; exit 1; }
+mreq=$(python3 -m kimiya run greet.kim 2>&1 || true)
+grep -q "required parameter" <<<"$mreq" \
+  || { echo "FAIL: missing required not refused"; echo "$mreq"; exit 1; }
+munk=$(python3 -m kimiya run greet.kim name=A bogus=1 2>&1 || true)
+grep -q "unknown parameter" <<<"$munk" \
+  || { echo "FAIL: unknown param not refused"; echo "$munk"; exit 1; }
+pout=$(KIMIYA_MOCK=1 python3 -m kimiya run greet.kim name=Ada times=3)
+grep -q '"hi Ada; hi Ada; hi Ada; "' <<<"$pout" \
+  || { echo "FAIL: param values not applied"; echo "$pout"; exit 1; }
+grep -q "params : name='Ada'" <<<"$pout" \
+  || { echo "FAIL: params not in certificate"; echo "$pout"; exit 1; }
+# compiled artifact: identical contract
+KIMIYA_MOCK=1 python3 -m kimiya compile greet.kim --out gr.py >/dev/null
+creq=$(python3 gr.py 2>&1 || true)
+grep -q "required parameter" <<<"$creq" \
+  || { echo "FAIL: compiled missing-required"; echo "$creq"; exit 1; }
+cpout=$(KIMIYA_MOCK=1 python3 gr.py name=Ada times=3)
+grep -q '"hi Ada; hi Ada; hi Ada; "' <<<"$cpout" \
+  || { echo "FAIL: compiled param values"; echo "$cpout"; exit 1; }
+grep -q "params : name='Ada'" <<<"$cpout" \
+  || { echo "FAIL: compiled params line"; echo "$cpout"; exit 1; }
 
 echo "== compile: emit standalone python and run it =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gs.py >/dev/null

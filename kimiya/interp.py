@@ -27,7 +27,7 @@ from pathlib import Path
 from . import ast_nodes as A
 from . import screen
 from . import vision
-from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle, run_judge,
+from .runtime import (Pool, Agent, Trace, Datasheets, get_oracle, run_judge, resolve_params,
                       run_gen)
 
 
@@ -68,7 +68,8 @@ class Interp:
                  models_override: list[str] | None = None,
                  py_funcs: dict | None = None,
                  py_exts: list | None = None,
-                 replay: bool = False):
+                 replay: bool = False,
+                 params: dict | None = None):
         self.prog = prog
         self.workspace = program_path.parent / ".kimiya"
         self.workspace.mkdir(exist_ok=True)
@@ -77,7 +78,14 @@ class Interp:
         self.locate_cache = vision.LocateCache(self.workspace)
         self.replay = replay or os.environ.get("KIMIYA_REPLAY") == "1"
         self.oracle = get_oracle()
-        self.env: dict[str, object] = {}
+        # Resolve declared params against the caller's pairs BEFORE
+        # anything else: a missing required param must refuse the run
+        # while refusal is still free (no model has been consulted).
+        table = [{"name": d.name, "type": d.type, "default": d.default,
+                  "required": d.required}
+                 for d in prog.decls if isinstance(d, A.ParamDecl)]
+        self.cli_params = resolve_params(table, params or {})
+        self.env: dict[str, object] = dict(self.cli_params)
         self.contexts = {d.name: d for d in prog.decls
                          if isinstance(d, A.ContextDecl)}
         self.schemas = {d.name: d for d in prog.decls
@@ -184,6 +192,7 @@ class Interp:
                                    for n, d in self.displays.items()}}
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
+            "params": dict(self.cli_params),
             "cost": dict(self.cost, seconds=round(secs, 1)),
             "trace_records": self.trace.count(),
         }

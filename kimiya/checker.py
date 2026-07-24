@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from . import ast_nodes as A
 from . import screen
-from .runtime import Agent, family_of
+from .runtime import Agent, family_of, PARAM_TYPES
 
 BUILTIN_SCHEMAS = {"Text", "Json"}
 BUILTIN_FUNCS = {
@@ -99,6 +99,26 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             can_see[d.name] = Agent(
                 name=d.name, model=fk.get("model", ""),
                 vision_declared=fk.get("vision")).vision
+    params: dict[str, A.ParamDecl] = {}
+    for d in prog.decls:
+        if not isinstance(d, A.ParamDecl):
+            continue
+        if d.name in params:
+            r.err(d.line, f"duplicate param '{d.name}' (first declared on "
+                          f"line {params[d.name].line})")
+            continue
+        params[d.name] = d
+        if d.type not in PARAM_TYPES:
+            r.err(d.line, f"param '{d.name}': unknown type '{d.type}' "
+                          f"(known: {', '.join(PARAM_TYPES)})")
+        elif not d.required:
+            want = {"text": str, "num": float, "bool": bool}[d.type]
+            if d.type == "num" and isinstance(d.default, bool):
+                r.err(d.line, f"param '{d.name}': default is not a number")
+            elif not isinstance(d.default, want):
+                r.err(d.line, f"param '{d.name}': default "
+                              f"{d.default!r} is not a {d.type}")
+
     displays = {d.name for d in prog.decls if isinstance(d, A.DisplayDecl)}
     for d in prog.decls:
         if isinstance(d, A.DisplayDecl):
@@ -128,7 +148,7 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             else:
                 irreversible.discard((d.surface, d.action))
 
-    defined: set[str] = set()
+    defined: set[str] = set(params)
     in_fn = [False]
 
     def known_callable(name: str) -> bool:

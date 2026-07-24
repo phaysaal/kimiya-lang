@@ -106,6 +106,23 @@ class PoolDecl:
 
 
 @dataclass
+class ParamDecl:
+    """A program's typed CLI/embedding interface: `param name: text = "x"`.
+
+    Backend-neutral by design: the interpreter maps params to `name=value`
+    argv pairs, the Python compiler emits the same contract into the
+    artifact, and a future native backend maps the same table to its own
+    CLI or FFI. Resolved values are recorded in the certificate.
+    """
+
+    name: str
+    type: str             # "text" | "num" | "bool"
+    default: object = None
+    required: bool = False
+    line: int = 0
+
+
+@dataclass
 class DisplayDecl:
     name: str
     fields: dict          # x11, ssh, monitor

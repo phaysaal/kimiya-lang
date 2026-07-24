@@ -1,0 +1,6 @@
+-- A param default must match its declared type.
+pool A = "llama3.1:8b"
+
+param count: num = "three"
+
+commit(count)
