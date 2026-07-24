@@ -66,7 +66,9 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 cp examples/grounded_summary.kim examples/agentic_digest.kim \
    examples/data_pipeline.kim examples/textlib.kim examples/pystats.py \
    examples/gui_publish.kim examples/guiprobe.py \
-   examples/gui_collab.kim examples/collabdb.py "$TMP/"
+   examples/gui_collab.kim examples/collabdb.py \
+   examples/counterfactual.kim examples/bizlib.py examples/business.json \
+   "$TMP/"
 FIXTURE="$PWD/tests/fixtures/screen.png"
 printf '{"W3 Harness Group":{"join_code":"KX7P2M9Q","members":["A","B"],"messages":["m_ab","m_ba"]}}' > "$TMP/collab_state.json"
 printf '{"talk_menu_x":300,"talk_menu_y":180,"publish_x":1180,"publish_y":740}' > "$TMP/locators.json"
@@ -324,6 +326,31 @@ grep -q "memo   : 2 reuse" <<<"$c2" \
   || { echo "FAIL: cross-run memo persistence"; echo "$c2"; exit 1; }
 grep -q "12 votes" <<<"$c2" \
   || { echo "FAIL: cross-run memo did not save votes"; echo "$c2"; exit 1; }
+
+echo "== counterfactual: kernel space, explored screens, one-factor verdict =="
+rm -f .kimiya/memo.json
+k1=$(KIMIYA_MOCK=1 python3 -m kimiya run counterfactual.kim)
+grep -q "COMMITTED" <<<"$k1" || { echo "FAIL: counterfactual"; echo "$k1"; exit 1; }
+grep -q "explored : 8" <<<"$k1" \
+  || { echo "FAIL: screens not excluded"; echo "$k1"; exit 1; }
+grep -q "change hours" <<<"$k1" \
+  || { echo "FAIL: minimal intervention not picked"; echo "$k1"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: invoice grew with the search"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+assert len(c["theta_factors"]) == 1, c["theta_factors"]
+assert c["explored"] == 8 and c["params"]["max_changes"] == 1.0, c
+PY
+k2=$(KIMIYA_MOCK=1 python3 -m kimiya run counterfactual.kim max_changes=2)
+grep -q "explored : 32" <<<"$k2" \
+  || { echo "FAIL: pairs space"; echo "$k2"; exit 1; }
+grep -q "memo   : 1 reuse" <<<"$k2" \
+  || { echo "FAIL: verdict not reused across runs"; echo "$k2"; exit 1; }
+# compiled artifact: same shape
+KIMIYA_MOCK=1 python3 -m kimiya compile counterfactual.kim --out cf.py >/dev/null
+k3=$(KIMIYA_MOCK=1 python3 cf.py max_changes=2)
+grep -q "explored : 32" <<<"$k3" && grep -q "COMMITTED" <<<"$k3" \
+  || { echo "FAIL: compiled counterfactual"; echo "$k3"; exit 1; }
 
 echo "== compile: emit standalone python and run it =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gs.py >/dev/null

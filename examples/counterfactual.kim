@@ -1,0 +1,59 @@
+-- Counterfactual search: which mutable factors, changed, would plausibly
+-- move a business from its current result to the expected one?
+--
+-- The shape: immutable facts (location, season, competition) are
+-- constraints; mutable factors (hours, pricing, channel, menu) span the
+-- intervention space. The division of labour is the whole point:
+--
+--   kernel (certainty 1)   parse the case, enumerate interventions,
+--                          prefer the minimal change, enforce the
+--                          invariant that only mutables are touched
+--   explore (free)         judged plausibility screens over the space —
+--                          trace-recorded, excluded from θ
+--   verdict (live)         one memoized cross-family judgment on the
+--                          single chosen intervention
+--
+-- So the certificate carries exactly ONE instrument factor, however
+-- large the space searched — and `memo` makes reruns free.
+--
+--   kimiya run counterfactual.kim                -- single-factor changes
+--   kimiya run counterfactual.kim max_changes=2  -- pairs too
+
+param max_changes: num = 1
+
+pool A = "llama3.1:8b"
+pool B = "gemma2:9b"
+pool C = "mistral:7b"
+
+use python "bizlib.py"
+
+context k_plaus:
+    domain     = "whether a business intervention is a plausible route to a stated outcome"
+    preserve   = [causal_direction, constraint_respect, magnitude]
+    allow_loss = [phrasing, ordering]
+
+-- The case enters through the world door, like any observation.
+b := observe file("business.json")
+check b.exists
+biz := parse_biz(b.text)
+
+cands := interventions(biz, max_changes)
+check len(cands) > 0
+
+-- Screen the space. Every judgment here gates progress, not the verdict.
+plausible := []
+explore:
+    forall c in cands:
+        if judge<3,2/3> (describe_change(c, biz) |= "a plausible route from the current result to the expected result, within the immutable constraints") under k_plaus panel [B, C]:
+            plausible := plausible + [c]
+
+check len(plausible) > 0
+pick := minimal(plausible)               -- fewest changes wins: kernel
+check touches_only_mutable(pick, biz)    -- the invariant, at certainty 1
+
+-- The verdict: fresh, outside explore, counted once — and memoized, so
+-- re-running the program re-uses this reading rather than re-paying it.
+if memo judge<5,4/5> (describe_change(pick, biz) |= "would plausibly move the business from the current result to the expected result") under k_plaus panel [B, C]:
+    commit(describe_change(pick, biz))
+else:
+    abstain

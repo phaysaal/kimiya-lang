@@ -11,7 +11,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.3.1 (pre-stable).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.3.2 (pre-stable).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.3.1`), so a run is
 always attributable to a language state. Designed independently — the
@@ -212,6 +212,14 @@ re-asks as one reading, which matches the measured reality (same-input
 retries of the same instrument are highly correlated, not independent
 votes) — amplification comes from `judge<k,τ>`'s panel, not from asking
 twice.
+
+**Worked example:** `examples/counterfactual.kim` — the business
+turnaround as warranted search. Immutable facts constrain, kernel code
+enumerates the intervention space and prefers the minimal change,
+`explore` screens candidates with judged plausibility (excluded from θ),
+and one memoized cross-family judgment on the chosen intervention is the
+entire invoice: 8 or 32 candidates searched, exactly one θ factor either
+way, and reruns reuse the verdict reading for free.
 
 ## Parameters: a program's typed interface
 

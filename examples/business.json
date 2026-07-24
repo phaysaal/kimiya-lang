@@ -1,0 +1,15 @@
+{
+  "immutable": {
+    "location": "quiet suburb",
+    "season": "winter",
+    "competition": "two chain cafés within 300 m"
+  },
+  "mutable": {
+    "hours":   {"current": "07:00-15:00",        "options": ["07:00-19:00", "09:00-21:00"]},
+    "pricing": {"current": "premium",            "options": ["mid-range", "premium + loyalty card"]},
+    "channel": {"current": "walk-in only",       "options": ["walk-in + delivery apps", "walk-in + preorder pickup"]},
+    "menu":    {"current": "20-item café menu", "options": ["12-item focused menu", "20 items + seasonal specials"]}
+  },
+  "current_result": "38 covers/day, thin margin",
+  "expected_result": "60+ covers/day at a sustainable margin"
+}

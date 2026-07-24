@@ -6,3 +6,4 @@ examples/*.py
 !examples/pystats.py
 !examples/guiprobe.py
 !examples/collabdb.py
+!examples/bizlib.py
