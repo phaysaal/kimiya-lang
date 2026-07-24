@@ -1,0 +1,83 @@
+-- Counterfactual search, evolutionary variant: when the space is too
+-- big to enumerate.
+--
+-- counterfactual.kim enumerates: 4 levers × 2 listed options each. An
+-- enterprise is not like that — hundreds of levers, continuous levels,
+-- interventions nobody put on a menu. Enumeration dies combinatorially,
+-- and worse: THE MENU ITSELF is the limitation, because the best move
+-- may be one no options list contains.
+--
+-- So invert the roles. The model PROPOSES interventions — free
+-- invention, seeded by the case and the incumbent plan — and the same
+-- three-layer discipline holds the search:
+--
+--   kernel (certainty 1)   the baseline seed (best enumerated single
+--                          change), and the invariant: a proposal is
+--                          schema-structured, so "touches only mutable
+--                          levers" stays a CHECKABLE fact even over
+--                          free generation
+--   explore (free)         plausibility screens and the tournament
+--                          against the incumbent — judged, excluded
+--                          from θ
+--   verdict (live)         ONE memoized cross-family judgment on the
+--                          final incumbent
+--
+-- Evolution starts from a defensible answer and must beat it to replace
+-- it: if every proposal fails the gates, you still commit the
+-- enumerated baseline. gen is deliberately NOT memoized — mutation
+-- needs diversity; determinism would freeze the search.
+--
+-- The invoice does not grow with generations × children: one θ factor,
+-- whether 6 proposals were tried or 6,000. That is the property that
+-- scales to the enterprise case.
+--
+--   kimiya run counterfactual_evolve.kim
+--   kimiya run counterfactual_evolve.kim generations=5 children=4
+
+param generations: num = 3
+param children: num = 2
+
+pool A = "llama3.1:8b"
+pool B = "gemma2:9b"
+pool C = "mistral:7b"
+
+use python "bizlib.py"
+
+schema Proposal:
+    factor: text
+    change: text
+    rationale: text
+
+context k_plaus:
+    domain     = "whether a business intervention is a plausible route to a stated outcome"
+    preserve   = [causal_direction, constraint_respect, magnitude]
+    allow_loss = [phrasing, ordering]
+
+b := observe file("business.json")
+check b.exists
+biz := parse_biz(b.text)
+
+-- Kernel seed: the search must beat this to matter.
+incumbent := seed_intervention(biz)
+rejected := 0
+
+explore:
+    forall g in range(generations):
+        forall i in range(children):
+            p := gen<Proposal>("Invent ONE business intervention that is NOT limited to any preset options. Case: " + summary(biz) + " Current best plan: " + incumbent + " Name the factor you change (must be one of: " + mutable_names(biz) + "), the concrete change, and a one-line rationale.") by A
+            if check(is_mutable(p.factor, biz)):
+                cand := describe_prop(p, biz)
+                if judge<3,2/3> (cand |= "a plausible route from the current result to the expected result, within the immutable constraints") under k_plaus panel [B, C]:
+                    if judge<3,2/3> (cand |= "a more promising route to the expected result than this plan: " + incumbent) under k_plaus panel [B, C]:
+                        incumbent := cand
+            else:
+                rejected := rejected + 1
+
+print "kernel-rejected proposals: " + str(rejected)
+check len(incumbent) > 0
+
+-- The verdict: fresh, outside explore, counted once, reusable across runs.
+if memo judge<5,4/5> (incumbent |= "would plausibly move the business from the current result to the expected result") under k_plaus panel [B, C]:
+    commit(incumbent)
+else:
+    abstain

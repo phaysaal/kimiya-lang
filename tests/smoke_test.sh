@@ -67,7 +67,8 @@ cp examples/grounded_summary.kim examples/agentic_digest.kim \
    examples/data_pipeline.kim examples/textlib.kim examples/pystats.py \
    examples/gui_publish.kim examples/guiprobe.py \
    examples/gui_collab.kim examples/collabdb.py \
-   examples/counterfactual.kim examples/bizlib.py examples/business.json \
+   examples/counterfactual.kim examples/counterfactual_evolve.kim \
+   examples/bizlib.py examples/business.json \
    "$TMP/"
 FIXTURE="$PWD/tests/fixtures/screen.png"
 printf '{"W3 Harness Group":{"join_code":"KX7P2M9Q","members":["A","B"],"messages":["m_ab","m_ba"]}}' > "$TMP/collab_state.json"
@@ -351,6 +352,31 @@ KIMIYA_MOCK=1 python3 -m kimiya compile counterfactual.kim --out cf.py >/dev/nul
 k3=$(KIMIYA_MOCK=1 python3 cf.py max_changes=2)
 grep -q "explored : 32" <<<"$k3" && grep -q "COMMITTED" <<<"$k3" \
   || { echo "FAIL: compiled counterfactual"; echo "$k3"; exit 1; }
+
+echo "== counterfactual_evolve: free generation, kernel-gated, baseline degrade =="
+# Under mock, every invented proposal names a non-mutable factor, so the
+# invariant rejects all of them and the enumerated baseline commits.
+e1=$(KIMIYA_MOCK=1 python3 -m kimiya run counterfactual_evolve.kim)
+grep -q "COMMITTED" <<<"$e1" || { echo "FAIL: evolve"; echo "$e1"; exit 1; }
+grep -q "kernel-rejected proposals: 6" <<<"$e1" \
+  || { echo "FAIL: invariant did not gate free generation"; echo "$e1"; exit 1; }
+grep -q "6 gen" <<<"$e1" \
+  || { echo "FAIL: gen population"; echo "$e1"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: evolve invoice"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+assert len(c["theta_factors"]) == 1, c["theta_factors"]
+assert "change hours" in str(c["value"]), c["value"]
+PY
+# population scales; the invoice does not
+e2=$(KIMIYA_MOCK=1 python3 -m kimiya run counterfactual_evolve.kim generations=5 children=4)
+grep -q "kernel-rejected proposals: 20" <<<"$e2" \
+  || { echo "FAIL: evolve params"; echo "$e2"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: invoice grew with population"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+assert len(c["theta_factors"]) == 1, c["theta_factors"]
+PY
 
 echo "== compile: emit standalone python and run it =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gs.py >/dev/null

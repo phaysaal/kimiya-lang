@@ -11,7 +11,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.3.2 (pre-stable).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.3.3 (pre-stable).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.3.1`), so a run is
 always attributable to a language state. Designed independently — the
@@ -220,6 +220,14 @@ enumerates the intervention space and prefers the minimal change,
 and one memoized cross-family judgment on the chosen intervention is the
 entire invoice: 8 or 32 candidates searched, exactly one θ factor either
 way, and reruns reuse the verdict reading for free.
+Its sibling `examples/counterfactual_evolve.kim` is the path for spaces
+too big to enumerate — the enterprise case: the model *invents*
+interventions beyond any menu (`gen` inside `explore`, never memoized —
+mutation needs diversity), a schema keeps free generation
+kernel-checkable ("touches only mutable levers" stays a certainty-1
+fact), evolution starts from the enumerated baseline and must beat it,
+and the invoice is still one θ factor whether 6 proposals were tried or
+6,000.
 
 ## Parameters: a program's typed interface
 

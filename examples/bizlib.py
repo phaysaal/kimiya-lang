@@ -47,3 +47,44 @@ def describe_change(c, biz):
             f"Immutable constraints: {json.dumps(biz['immutable'])}\n"
             f"Current result: {biz['current_result']}\n"
             f"Expected result: {biz['expected_result']}")
+
+
+# ---- helpers for the evolutionary variant (counterfactual_evolve.kim) ----
+
+def summary(biz):
+    """The case, compressed for a generation prompt."""
+    muts = "; ".join(f"{f} (now: {s['current']})"
+                     for f, s in biz["mutable"].items())
+    return (f"Immutable: {json.dumps(biz['immutable'])}. "
+            f"Mutable levers: {muts}. "
+            f"Current result: {biz['current_result']}. "
+            f"Expected result: {biz['expected_result']}.")
+
+
+def mutable_names(biz):
+    return ", ".join(biz["mutable"])
+
+
+def is_mutable(factor, biz):
+    """The invariant, checkable because proposals are schema-structured:
+    free generation, kernel-gated."""
+    return str(factor) in biz["mutable"]
+
+
+def seed_intervention(biz):
+    """Kernel baseline: the minimal enumerated single change. Evolution
+    starts from a defensible answer and must beat it to replace it."""
+    return describe_change(minimal(interventions(biz, 1)), biz)
+
+
+def describe_prop(p, biz):
+    """A model-invented proposal, rendered comparably to enumerated ones.
+    Only called after is_mutable(p['factor']) — indexing is safe."""
+    f = str(p["factor"])
+    cur = biz["mutable"][f]["current"]
+    return (f"Proposed intervention (novel):\n"
+            f"- change {f}: {cur} -> {p['change']}\n"
+            f"  rationale: {p['rationale']}\n"
+            f"Immutable constraints: {json.dumps(biz['immutable'])}\n"
+            f"Current result: {biz['current_result']}\n"
+            f"Expected result: {biz['expected_result']}")
