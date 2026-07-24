@@ -378,6 +378,25 @@ c = json.load(open(".kimiya/certificate.json"))
 assert len(c["theta_factors"]) == 1, c["theta_factors"]
 PY
 
+echo "== artifact versioning: stamp + compatibility gate =="
+KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gv.py >/dev/null
+grep -q "_COMPILED_WITH = " gv.py \
+  || { echo "FAIL: artifact not version-stamped"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: compat gate"; exit 1; }
+from kimiya.compiled_runtime import check_artifact_compat
+from kimiya._version import __version__ as V
+assert check_artifact_compat(V) is None                  # same version: silent
+assert "recompil" in (check_artifact_compat(None) or "") # pre-stamp: note
+maj = int(V.split(".")[0])
+for bad in (f"{maj+1}.0.0", f"{maj-1}.9.9", f"{maj}.99.0"):
+    try:
+        check_artifact_compat(bad)
+        raise AssertionError(f"accepted {bad}")
+    except SystemExit:
+        pass                                             # refused, as promised
+assert "recommended" in check_artifact_compat(f"{maj}.0.0")  # older MINOR: note only
+PY
+
 echo "== compile: emit standalone python and run it =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gs.py >/dev/null
 KIMIYA_MOCK=1 python3 gs.py | grep -q "COMMITTED" \

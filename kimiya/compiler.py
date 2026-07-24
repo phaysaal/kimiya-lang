@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 
 from . import ast_nodes as A
+from ._version import __version__ as KIMIYA_VERSION
 
 
 class Compiler:
@@ -229,6 +230,8 @@ class Compiler:
         self.emit("# This artifact passed the static checks at compile "
                   "time; it")
         self.emit("# cannot represent an ill-formed Kimiya program.")
+        self.emit(f"# compiled by kimiya v{KIMIYA_VERSION}")
+        self.emit(f"_COMPILED_WITH = {KIMIYA_VERSION!r}")
         self.emit("import sys")
         self.emit("import importlib, importlib.util")
         self.emit("from kimiya.compiled_runtime import Runtime, Bolt, "
@@ -298,7 +301,8 @@ class Compiler:
         self.emit("global rt")
         self.emit("models, params = parse_cli(sys.argv[1:], _PARAMS)")
         self.emit(f"rt = Runtime(__file__, _AGENTS, _CONTEXTS, _SCHEMAS, "
-                  f"_PY_EXTS, models, displays=_DISPLAYS, params=params)")
+                  f"_PY_EXTS, models, displays=_DISPLAYS, params=params, "
+                  f"compiled_with=_COMPILED_WITH)")
         self.emit("_load_py(rt)")
         fnmap = ("{" + ", ".join(f"{f.name!r}: _fn_{f.name}"
                                  for f in fns) + "}")

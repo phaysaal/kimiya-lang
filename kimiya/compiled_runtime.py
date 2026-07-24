@@ -29,6 +29,43 @@ class Bolt(Exception):
         self.reason = reason
 
 
+def check_artifact_compat(compiled_with: str | None) -> str | None:
+    """The compatibility contract for compiled artifacts.
+
+    Policy: within a MAJOR version the runtime stays backward compatible —
+    an older artifact runs, with a note when MINOR differs. Across MAJOR
+    versions compatibility is not promised; the artifact refuses with a
+    recompile instruction rather than failing somewhere ambiguous later.
+    An artifact NEWER than the runtime also refuses — it may call runtime
+    surface the installed kimiya does not have. Every break is recorded in
+    CHANGELOG.md. Returns a warning string, or None."""
+    if not compiled_with:
+        return ("this artifact predates version stamping (< v1.4.0) — "
+                "behavior is best-effort; recompile with `kimiya compile`")
+    try:
+        aj, an = (int(x) for x in compiled_with.split(".")[:2])
+        rj, rn = (int(x) for x in KIMIYA_VERSION.split(".")[:2])
+    except ValueError:
+        return f"unparseable artifact version {compiled_with!r}"
+    if aj != rj:
+        raise SystemExit(
+            f"artifact compiled with kimiya v{compiled_with}, but the "
+            f"installed runtime is v{KIMIYA_VERSION} — MAJOR versions "
+            "differ and compatibility is not promised across them (see "
+            "CHANGELOG.md). Recompile: kimiya compile <program>.kim")
+    if (aj, an) > (rj, rn):
+        raise SystemExit(
+            f"artifact compiled with kimiya v{compiled_with} is NEWER "
+            f"than the installed runtime v{KIMIYA_VERSION} — it may use "
+            "runtime surface this installation lacks. Upgrade kimiya or "
+            "recompile with this version.")
+    if an != rn:
+        return (f"artifact compiled with v{compiled_with}; runtime is "
+                f"v{KIMIYA_VERSION} — compatible (same MAJOR), but "
+                "recompiling is recommended")
+    return None
+
+
 def parse_cli(argv, param_table):
     """The compiled artifact's CLI contract, shared with `kimiya run`:
     positional `name=value` pairs for declared params, `--models m1,m2`
@@ -62,7 +99,7 @@ def parse_cli(argv, param_table):
 class Runtime:
     def __init__(self, source_file: str, agents, contexts, schemas,
                  py_exts=None, models_override=None, displays=None,
-                 params=None):
+                 params=None, compiled_with=None):
         self.workspace = Path(source_file).parent / ".kimiya"
         self.workspace.mkdir(exist_ok=True)
         self.trace = Trace(self.workspace)
@@ -74,6 +111,10 @@ class Runtime:
             monitor=d.get("monitor")) for d in (displays or [])}
         self.default_display = screen.Display()
         self.params = dict(params or {})
+        self.compiled_with = compiled_with
+        note = check_artifact_compat(compiled_with)
+        if note:
+            print(f"⚠ {note}")
         self.memo = MemoStore(self.workspace)
         self.memo_counted: set = set()
         self.memo_hits = 0
@@ -444,6 +485,7 @@ class Runtime:
             "overclaims": list(self.overclaims),
             "params": self.params,
             "kimiya_version": KIMIYA_VERSION,
+            "compiled_with": self.compiled_with,
             "memo_hits": self.memo_hits,
             "explored": self.theta_excluded,
             "cost": dict(self.cost), "trace_records": self.trace.count(),
@@ -494,7 +536,10 @@ class Runtime:
         for note in cert["overclaims"]:
             print(f"  ⚠ {note}")
         c = cert["cost"]
-        print(f"  kimiya : v{KIMIYA_VERSION}")
+        print(f"  kimiya : v{KIMIYA_VERSION}"
+              + (f" · artifact compiled with v{self.compiled_with}"
+                 if self.compiled_with and
+                 self.compiled_with != KIMIYA_VERSION else ""))
         print(f"  cost   : {c['gen_calls']} gen, {c['judge_votes']} votes, "
               f"{c['acts']} acts, {c['observes']} observes")
         print("─────────────────────────────────────────────")
