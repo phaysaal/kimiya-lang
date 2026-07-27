@@ -175,7 +175,7 @@ class Runtime:
 
     # ---- primitive operations (mirror the interpreter) ----
     def gen(self, schema: str, prompt: str, by: str | None, images=None,
-            memo=False):
+            memo=False, context=None):
         agent = self.pool.agent(by) if by else self.pool.default_generator()
         self.last_gen = agent
         prompt = _to_str(prompt)
@@ -195,6 +195,10 @@ class Runtime:
                     entry = {"agent": agent.name, "host": agent.host, **item}
                     if entry not in self.image_egress:
                         self.image_egress.append(entry)
+        # gen with images is a priced READ: one θ factor at the
+        # datasheet's conservative end, under read:<purpose>.
+        read_task = (f"read:{context or 'unscoped'}"
+                     if image_paths else None)
         if memo:
             image_key = ",".join(item["preview_sha"] for item in image_meta)
             key = MemoStore.key("gen", schema, prompt, agent.label(),
@@ -204,6 +208,13 @@ class Runtime:
                 self.memo_hits += 1
                 self.trace.append({"kind": "gen", "cache": "memo",
                                    "agent": ent.get("agent", "")})
+                if read_task and key not in self.memo_counted:
+                    if self.explore_depth == 0:
+                        self.memo_counted.add(key)
+                    self.add_theta(ent.get("factor_name", read_task),
+                                   ent.get("factor",
+                                           self.sheets.get(read_task)
+                                           ["beta_lo"]))
                 return ent["value"]
         self.cost["gen_calls"] += 1
         if schema == "Text":
@@ -216,8 +227,18 @@ class Runtime:
         else:
             out = run_gen(self.oracle, self.trace, agent, prompt,
                           self.schemas[schema], images=image_paths)
+        factor = None
+        if read_task and out is not None:
+            factor = self.sheets.get(read_task)["beta_lo"]
+            self.add_theta(read_task, factor)
         if memo and out is not None:
-            self.memo.put(key, {"value": out, "agent": agent.label()})
+            entry = {"value": out, "agent": agent.label()}
+            if read_task:
+                entry["factor_name"] = read_task
+                entry["factor"] = factor
+            self.memo.put(key, entry)
+            if read_task and self.explore_depth == 0:
+                self.memo_counted.add(key)
         return out
 
     def select(self, recall: float, query: str, store, ctx, by=None):

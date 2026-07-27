@@ -431,11 +431,16 @@ class Parser:
                 self.expect("OP", "=")
                 images = self.expr()
             self.expect("OP", ")")
+            ctx = None
+            if self.at_kw("under"):    # purpose of a priced (image) read
+                self.next()
+                ctx = self.expect("NAME").value
             by = None
             if self.at_kw("by"):
                 self.next()
                 by = self.expect("NAME").value
-            return A.GenExpr(schema, prompt, by, images=images, line=t.line)
+            return A.GenExpr(schema, prompt, by, images=images,
+                             context=ctx, line=t.line)
         if self.at_kw("select"):
             self.next()
             self.expect("OP", "<")

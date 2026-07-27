@@ -412,9 +412,13 @@ agent A:
     vision  = true
 schema Reading:
     text: text
+context k_r:
+    domain     = "reading a displayed value exactly as shown"
+    preserve   = [characters]
+    allow_loss = [font]
 shot := observe screen("eDP-1")
 check shot.exists
-r := gen<Reading>("Read the code shown.", images=[shot]) by A
+r := gen<Reading>("Read the code shown.", images=[shot]) under k_r by A
 check len(r.text) > 0
 commit(r)
 KIM
@@ -427,6 +431,32 @@ srct=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
        python3 srd.py)
 grep -q "COMMITTED" <<<"$srct" \
   || { echo "FAIL: compiled screen-read"; echo "$srct"; exit 1; }
+
+echo "== priced reads: read factor, datasheet moves theta =="
+p1=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+     python3 -m kimiya run sread.kim)
+grep -q "read:k_r" <<<"$p1" \
+  || { echo "FAIL: read not priced"; echo "$p1"; exit 1; }
+python3 -m kimiya datasheet \
+  "$OLDPWD_REPO/datasheets/screen_read.json" .kimiya >/dev/null
+# the shipped sheet is keyed read:k_read; install under k_r for the probe
+python3 - <<'PY'
+import json, pathlib
+src = json.load(open("$OLDPWD_REPO/datasheets/screen_read.json".replace("$OLDPWD_REPO", __import__("os").environ["OLDPWD_REPO"])))
+ws = pathlib.Path(".kimiya/datasheets.json")
+d = json.loads(ws.read_text()) if ws.exists() else {}
+d["read:k_r"] = dict(src["read:k_read"], calibrated=True)
+ws.write_text(json.dumps(d))
+PY
+p2=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+     python3 -m kimiya run sread.kim)
+grep -q "0.9398" <<<"$p2" \
+  || { echo "FAIL: measured read sheet not applied"; echo "$p2"; exit 1; }
+# text-only gen contributes no factor (the evolution property)
+printf 'pool A = "llama3.1:8b"\nx := gen<Text>("hi") by A\ncheck len(x) > 0\ncommit(x)\n' > tg.kim
+tgo=$(KIMIYA_MOCK=1 python3 -m kimiya run tg.kim)
+grep -q "factors: \[\]" <<<"$tgo" \
+  || { echo "FAIL: text gen gained a factor"; echo "$tgo"; exit 1; }
 
 echo "== artifact versioning: stamp + compatibility gate =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gv.py >/dev/null

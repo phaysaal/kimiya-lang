@@ -144,7 +144,8 @@ class Compiler:
             images = (self.expr(rhs.images)
                       if rhs.images is not None else "None")
             return (f"rt.gen({rhs.schema!r}, {self.expr(rhs.prompt)}, {by}, "
-                    f"images={images}, memo={rhs.memo})")
+                    f"images={images}, memo={rhs.memo}, "
+                    f"context={rhs.context!r})")
         if isinstance(rhs, A.SelectExpr):
             ctx = repr(rhs.context) if rhs.context else "None"
             by = repr(rhs.by) if rhs.by else "None"

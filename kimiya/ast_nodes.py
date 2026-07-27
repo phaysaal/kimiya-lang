@@ -177,6 +177,7 @@ class GenExpr:
     by: str | None
     images: object | None = None  # list of records from `observe image(...)`
     memo: bool = False    # exact-input reuse: same prompt -> same artifact
+    context: str | None = None    # `under CTX` — purpose of a priced read
     line: int = 0
 
 

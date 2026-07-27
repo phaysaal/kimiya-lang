@@ -320,6 +320,12 @@ class Interp:
             fields = []
         else:
             fields = [f for f, _ in self.schemas[g.schema].fields]
+        # A gen that consumes images is a READ — an instrument reading
+        # of the world, like a locate — and enters θ at its datasheet's
+        # conservative end under read:<purpose>. Text-only gen stays
+        # free: the model proposes, and only the gates warrant.
+        read_task = (f"read:{g.context or 'unscoped'}"
+                     if image_paths else None)
         if g.memo:
             image_key = ",".join(item["preview_sha"] for item in image_meta)
             key = MemoStore.key("gen", g.schema, prompt, agent.label(),
@@ -330,6 +336,13 @@ class Interp:
                 self.trace.append({"kind": "gen", "cache": "memo",
                                    "agent": ent.get("agent", ""),
                                    "line": g.line})
+                if read_task and key not in self.memo_counted:
+                    if self.explore_depth == 0:
+                        self.memo_counted.add(key)
+                    self.add_theta(ent.get("factor_name", read_task),
+                                   ent.get("factor",
+                                           self.sheets.get(read_task)
+                                           ["beta_lo"]))
                 return ent["value"]
         self.cost["gen_calls"] += 1
         if fields == []:
@@ -339,8 +352,18 @@ class Interp:
         else:
             out = run_gen(self.oracle, self.trace, agent, prompt, fields,
                           images=image_paths)
+        factor = None
+        if read_task and out is not None:
+            factor = self.sheets.get(read_task)["beta_lo"]
+            self.add_theta(read_task, factor)
         if g.memo and out is not None:
-            self.memo.put(key, {"value": out, "agent": agent.label()})
+            entry = {"value": out, "agent": agent.label()}
+            if read_task:
+                entry["factor_name"] = read_task
+                entry["factor"] = factor
+            self.memo.put(key, entry)
+            if read_task and self.explore_depth == 0:
+                self.memo_counted.add(key)
         return out
 
     def eval_select(self, sel: A.SelectExpr):

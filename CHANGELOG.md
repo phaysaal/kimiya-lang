@@ -16,7 +16,15 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
-## Unreleased
+## 1.6.0 — 2026-07-27
+- **Semantics (θ):** multimodal `gen` is now a *priced read* — a `gen`
+  that consumes images contributes one θ factor at its datasheet's
+  conservative end under `read:<purpose>`, declared with a new optional
+  `under CTX` on `gen`. Unscoped priced reads land at `read:unscoped`
+  (prior grade) with a check-time nudge. Text-only `gen` remains
+  factor-free. Certificates for existing multimodal programs will show
+  lower θ than under 1.5 — deliberately conservative, never overstating.
+  `memo` reads count once per run like every reused reading.
 - Read-accuracy campaign for the grounded screen-read
   (`tools/read_campaign.py`): 60 present + 20 absent rendered trials
   against kernel-grade ground truth, via the real language path

@@ -11,7 +11,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.5.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.6.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.4.0`; compiled runs
 also record the compiler version, and an artifact refuses to run across
@@ -195,13 +195,21 @@ workspace with:
 python3 -m kimiya datasheet datasheets/screen_read.json .kimiya
 ```
 
-One honest design note: reads arrive through `gen`, and `gen`
-contributes no θ factor — a read is *untrusted by design* and the gates
-after it (kernel checks, judges) carry the warrant, exactly as the
-two-user scenario treats its join code. Whether a multimodal read should
-enter θ at the measured rate directly — like a locate does — is an open
-question deliberately not decided here; the datasheet exists either way,
-and the `read:k_read` task name reserves the slot.
+**Reads are priced (since 1.6).** A `gen` that consumes images is an
+instrument reading of the world, like a locate — so it enters θ at its
+datasheet's conservative end, under `read:<purpose>`:
+
+```
+r := gen<Reading>("Read the join code shown", images=[shot]) under k_read by V
+-- θ factor: ('read:k_read', 0.9398) with the campaign sheet installed;
+-- prior-grade 0.60 (and a check-time nudge) when unscoped or unmeasured
+```
+
+Text-only `gen` remains free — the model proposes, the gates warrant —
+which is what keeps evolutionary search costless on the invoice. The
+choice errs conservative by design: when a downstream kernel gate
+independently verifies a read, θ double-counts slightly rather than ever
+overstating; `memo` reads count once per run like every reused reading.
 
 ## Search: `explore` and `memo`
 
@@ -738,7 +746,7 @@ stmt     := NAME := rhs | check E | print E | commit(E) | abstain
           | retry budget N until GUARD: BLOCK [inv E] [compensate: BLOCK]
           | act[<ACTOR>] SURFACE.ACTION(args)
           | settle[<ACTOR>] until GUARD within SECONDS
-rhs      := [memo] gen<SCHEMA>(E [, images=E]) [by POOL]
+rhs      := [memo] gen<SCHEMA>(E [, images=E]) [under CTX] [by POOL]
           | select<RECALL>(E, E) [under CTX]
           | observe (file|image)(E)
           | retry ...            -- value = body's last assignment

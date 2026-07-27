@@ -337,6 +337,19 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                           f"gen cites undeclared schema '{rhs.schema}'")
                 if rhs.by and rhs.by not in pools:
                     r.err(rhs.line, f"'by {rhs.by}': not a declared pool")
+                if rhs.context and rhs.context not in contexts:
+                    r.err(rhs.line, f"gen cites undeclared purpose "
+                                    f"'{rhs.context}'")
+                if rhs.context and rhs.images is None:
+                    r.warn(rhs.line,
+                           "`under` on a text-only gen has no effect — "
+                           "only image reads are priced")
+                if rhs.images is not None and not rhs.context:
+                    r.warn(rhs.line,
+                           "gen with images is a priced read; without "
+                           "`under <purpose>` its factor lands at "
+                           "read:unscoped (prior grade) — declare a "
+                           "purpose to use a measured datasheet")
                 chk_expr(rhs.prompt)
                 if rhs.images is not None:
                     chk_expr(rhs.images)

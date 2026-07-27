@@ -10,8 +10,13 @@ agent A:
 schema Assessment:
     text: text
 
+context k_scene:
+    domain     = "faithful description of what an image visibly shows"
+    preserve   = [visible_content, counts]
+    allow_loss = [style, emphasis]
+
 photo := observe image("tests/fixtures/screen.png")
 check photo.exists
-a := gen<Assessment>("Describe only what is visibly present.", images=[photo]) by A
+a := gen<Assessment>("Describe only what is visibly present.", images=[photo]) under k_scene by A
 check len(a.text) > 0
 commit(a)
