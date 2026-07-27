@@ -16,6 +16,7 @@ import os
 import time
 from pathlib import Path
 
+from . import image as image_surface
 from . import screen
 from . import vision
 from ._version import __version__ as KIMIYA_VERSION
@@ -131,7 +132,8 @@ class Runtime:
             binds[a["name"]] = Agent(
                 name=a["name"], model=a.get("model", ""),
                 backend=a.get("backend", "ollama"), url=a.get("url"),
-                key_env=a.get("key_env"), family_override=a.get("family"),
+                key_env=a.get("key_env"), key_file=a.get("key_file"),
+                zdr=a.get("zdr", False), family_override=a.get("family"),
                 vision_declared=a.get("vision"))
         if models_override:
             binds = {f"M{i}": Agent(name=f"M{i}", model=m)
@@ -146,6 +148,8 @@ class Runtime:
         self.locates_cached = 0
         self.locates_replayed = 0
         self.overclaims = []
+        self.image_observations: list[dict] = []
+        self.image_egress: list[dict] = []
         self.last_gen: Agent | None = None
         self.committed = None
 
@@ -170,12 +174,31 @@ class Runtime:
         self.py_funcs = py_funcs
 
     # ---- primitive operations (mirror the interpreter) ----
-    def gen(self, schema: str, prompt: str, by: str | None, memo=False):
+    def gen(self, schema: str, prompt: str, by: str | None, images=None,
+            memo=False):
         agent = self.pool.agent(by) if by else self.pool.default_generator()
         self.last_gen = agent
         prompt = _to_str(prompt)
+        image_paths = None
+        image_meta = []
+        if images is not None:
+            try:
+                image_paths, image_meta = image_surface.prepare(images)
+            except image_surface.ImageError as exc:
+                raise Bolt(f"gen: {exc}") from None
+            if image_paths and not agent.vision:
+                raise Bolt(
+                    f"gen: agent {agent.name} ({agent.model}) is not "
+                    "vision-capable")
+            if image_paths and not agent.is_local:
+                for item in image_meta:
+                    entry = {"agent": agent.name, "host": agent.host, **item}
+                    if entry not in self.image_egress:
+                        self.image_egress.append(entry)
         if memo:
-            key = MemoStore.key("gen", schema, prompt, agent.label())
+            image_key = ",".join(item["preview_sha"] for item in image_meta)
+            key = MemoStore.key("gen", schema, prompt, agent.label(),
+                                image_key)
             ent = self.memo.get(key)
             if ent is not None:
                 self.memo_hits += 1
@@ -184,13 +207,15 @@ class Runtime:
                 return ent["value"]
         self.cost["gen_calls"] += 1
         if schema == "Text":
-            out = run_gen(self.oracle, self.trace, agent, prompt, None)
+            out = run_gen(self.oracle, self.trace, agent, prompt, None,
+                          images=image_paths)
         elif schema == "Json":
             out = run_gen(self.oracle, self.trace, agent,
-                          prompt + "\n\nFIELDS: result", ["result"])
+                          prompt + "\n\nFIELDS: result", ["result"],
+                          images=image_paths)
         else:
             out = run_gen(self.oracle, self.trace, agent, prompt,
-                          self.schemas[schema])
+                          self.schemas[schema], images=image_paths)
         if memo and out is not None:
             self.memo.put(key, {"value": out, "agent": agent.label()})
         return out
@@ -250,22 +275,37 @@ class Runtime:
         purpose = self.contexts.get(ctx_name, ctx_name)
         task = f"{relation}:{ctx_name}"
         images = None
+        image_meta = []
         if relation == "shows":
             shot = left
-            if not (isinstance(shot, dict) and shot.get("kind") == "screen"):
-                raise Bolt("shows(...) needs a screenshot as its first "
-                           "argument (from observe screen(...))")
+            if not (isinstance(shot, dict)
+                    and shot.get("kind") in ("screen", "image")):
+                raise Bolt("shows(...) needs an observed image as its "
+                           "first argument")
             if not shot.get("exists"):
-                raise Bolt("shows: no screenshot to judge — observe screen "
-                           "returned exists: false")
-            images = [shot["path"]]
-            evidence = (f"screenshot of {shot['region']} on "
-                        f"{shot['display']}, {shot['width']}x"
-                        f"{shot['height']} at origin ({shot['x']}, "
-                        f"{shot['y']}), sha {shot['sha']}")
-            claim = f"The screenshot shows: {_to_str(right)}"
+                raise Bolt("shows: image observation returned exists: false")
+            if shot.get("kind") == "screen":
+                images = [shot["path"]]
+                evidence = (
+                    f"screenshot of {shot['region']} on "
+                    f"{shot['display']}, {shot['width']}x"
+                    f"{shot['height']} at origin ({shot['x']}, "
+                    f"{shot['y']}), sha {shot['sha']}"
+                )
+            else:
+                try:
+                    images, image_meta = image_surface.prepare([shot])
+                except image_surface.ImageError as exc:
+                    raise Bolt(f"shows: {exc}") from None
+                evidence = (
+                    f"observed {shot['format']} image {shot['width']}x"
+                    f"{shot['height']}, source sha {shot['sha']}, "
+                    f"preview sha {shot['preview_sha']}"
+                )
+            claim = f"The observed image shows: {_to_str(right)}"
             return self._run_judge(k, tau, task, claim, evidence, purpose,
-                                   panel, paraphrases, images, memo)
+                                   panel, paraphrases, images, memo,
+                                   image_meta)
         left, right = _to_str(left), _to_str(right) if right is not None else ""
         if relation == "entails":
             evidence, claim = left, f"The evidence supports: {right}"
@@ -281,7 +321,7 @@ class Runtime:
                                panel, paraphrases, None, memo)
 
     def _run_judge(self, k, tau, task, claim, evidence, purpose, panel,
-                   paraphrases, images=None, memo=False):
+                   paraphrases, images=None, memo=False, image_meta=None):
         memo_key = None
         if memo:
             memo_key = MemoStore.key("judge", task, claim, evidence,
@@ -301,6 +341,16 @@ class Runtime:
         j = run_judge(self.pool, self.oracle, self.trace, self.sheets,
                       task, claim, evidence, gen, k, tau, purpose,
                       panel, paraphrases, images)
+        if image_meta:
+            for voter in j.record.get("panel", []):
+                agent = self.pool.agent(voter["agent"])
+                if agent.is_local:
+                    continue
+                for item in image_meta:
+                    entry = {
+                        "agent": agent.name, "host": agent.host, **item}
+                    if entry not in self.image_egress:
+                        self.image_egress.append(entry)
         self.cost["judge_votes"] += k
         if not j.certified:
             self.uncertified += 1
@@ -356,6 +406,25 @@ class Runtime:
             self.trace.append({"kind": "observe", "surface": "screen",
                                **{k: v for k, v in rec.items()
                                   if k != "kind"}})
+            return rec
+        if surface == "image":
+            if len(args) != 1:
+                raise Bolt("observe image expects one path")
+            rec = image_surface.observe(
+                args[0], self.workspace / "images")
+            self.trace.append({
+                "kind": "observe", "surface": "image",
+                **{k: v for k, v in rec.items() if k != "kind"},
+            })
+            if rec.get("exists"):
+                meta = {
+                    k: rec[k] for k in (
+                        "path", "sha", "preview_sha", "decoder",
+                        "width", "height", "format"
+                    )
+                }
+                if meta not in self.image_observations:
+                    self.image_observations.append(meta)
             return rec
         path = Path(_to_str(args[0]))
         if not path.exists():
@@ -472,6 +541,8 @@ class Runtime:
             "instruments": {t: self.sheets.get(t) for t in tasks},
             "python_extensions": self.py_exts,
             "egress": egress,
+            "image_observations": list(self.image_observations),
+            "image_egress": list(self.image_egress),
             "screen": ({"driver": screen.driver_name(),
                         "target": screen.target(),
                         "acts": self.screen_acts,
@@ -505,6 +576,11 @@ class Runtime:
             print(f"  egress : {', '.join(egress)} (prompts left the machine)")
         else:
             print("  egress : none (all agents local)")
+        if self.image_egress:
+            print(f"  image egress : {len(self.image_egress)} observed "
+                  "image disclosure(s)")
+        elif self.image_observations:
+            print("  image egress : none (observed pixels stayed local)")
         if self.params:
             shown = ", ".join(f"{k}={v!r}" for k, v in self.params.items())
             print(f"  params : {shown}")

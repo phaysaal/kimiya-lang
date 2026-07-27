@@ -1,0 +1,11 @@
+agent A:
+    backend = "ollama"
+    model   = "llama3.1:8b"
+
+schema Answer:
+    text: text
+
+p := observe image("tests/fixtures/screen.png")
+check p.exists
+a := gen<Answer>("Describe it.", images=[p]) by A
+commit(a)

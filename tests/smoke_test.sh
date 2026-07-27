@@ -15,44 +15,49 @@ python3 -m kimiya check examples/hybrid_pool.kim | grep -q "checks pass" \
   || { echo "FAIL: hybrid_pool rejected"; exit 1; }
 
 echo "== checker: bad programs must be rejected with the right rule =="
-declare -A want=(
-  [silent_equality]="undeclared purpose"
-  [self_judgment]="J ⋪ C"
-  [unguarded_delete]="unguarded"
-  [retry_effects]="snapshot retry over an external world"
-  [irreversible_in_retry]="inside a retry body"
-  [impure_module]="must be pure declarations"
-  [arity_mismatch]="argument(s)"
-  [remote_self_judgment]="J ⋪ C"
-  [missing_url]="needs a url"
-  [field_typo]="has no field 'txet'"
-  [field_on_text]="cannot read field"
-  [iterate_text]="cannot iterate a text"
-  [select_text]="expected a list"
-  [unguarded_confirm]="irreversible act screen.confirm is unguarded"
-  [confirm_in_retry]="screen.confirm inside a retry body"
-  [screen_arity]="screen.click takes 2 argument(s)"
-  [vision_no_instrument]="needs an instrument"
-  [vision_no_purpose]="must cite a purpose"
-  [blind_locator]="is not vision-capable"
-  [blind_shows_panel]="would vote on a screenshot they never saw"
-  [shows_not_screenshot]="takes a screenshot as its first argument"
-  [blind_claude_url]="unknown backend"
-  [undeclared_actor]="not a declared display"
-  [actor_on_file]="screen surface only"
-  [param_bad_default]="is not a num"
-  [param_dup]="duplicate param"
-  [param_bad_type]="unknown type"
-  [commit_in_explore]="commit inside explore"
-  [irreversible_in_explore]="inside explore"
+want=(
+  "silent_equality|undeclared purpose"
+  "self_judgment|J ⋪ C"
+  "unguarded_delete|unguarded"
+  "retry_effects|snapshot retry over an external world"
+  "irreversible_in_retry|inside a retry body"
+  "impure_module|must be pure declarations"
+  "arity_mismatch|argument(s)"
+  "remote_self_judgment|J ⋪ C"
+  "missing_url|needs a url"
+  "field_typo|has no field 'txet'"
+  "field_on_text|cannot read field"
+  "iterate_text|cannot iterate a text"
+  "select_text|expected a list"
+  "unguarded_confirm|irreversible act screen.confirm is unguarded"
+  "confirm_in_retry|screen.confirm inside a retry body"
+  "screen_arity|screen.click takes 2 argument(s)"
+  "vision_no_instrument|needs an instrument"
+  "vision_no_purpose|must cite a purpose"
+  "blind_locator|is not vision-capable"
+  "blind_shows_panel|would vote on an image they never saw"
+  "shows_not_screenshot|takes an observed image as its first argument"
+  "image_direct_path|expected list<image observation>"
+  "image_blind_generator|not vision-capable"
+  "image_wrong_arity|takes exactly one path"
+  "blind_claude_url|unknown backend"
+  "undeclared_actor|not a declared display"
+  "actor_on_file|screen surface only"
+  "param_bad_default|is not a num"
+  "param_dup|duplicate param"
+  "param_bad_type|unknown type"
+  "commit_in_explore|commit inside explore"
+  "irreversible_in_explore|inside explore"
 )
-for name in "${!want[@]}"; do
+for case in "${want[@]}"; do
+  name=${case%%|*}
+  expected=${case#*|}
   out=$(python3 -m kimiya check "tests/bad/$name.kim" 2>&1 || true)
   if python3 -m kimiya check "tests/bad/$name.kim" >/dev/null 2>&1; then
     echo "FAIL: tests/bad/$name.kim was accepted"; exit 1
   fi
-  if ! grep -qF "${want[$name]}" <<<"$out"; then
-    echo "FAIL: $name did not report '${want[$name]}'"; echo "$out"; exit 1
+  if ! grep -qF "$expected" <<<"$out"; then
+    echo "FAIL: $name did not report '$expected'"; echo "$out"; exit 1
   fi
 done
 
@@ -68,6 +73,7 @@ cp examples/grounded_summary.kim examples/agentic_digest.kim \
    examples/gui_publish.kim examples/guiprobe.py \
    examples/gui_collab.kim examples/collabdb.py \
    examples/counterfactual.kim examples/counterfactual_evolve.kim \
+   examples/image_assess.kim \
    examples/bizlib.py examples/business.json \
    "$TMP/"
 FIXTURE="$PWD/tests/fixtures/screen.png"
@@ -77,6 +83,8 @@ printf '{"talks":[{"name":"Release notes","published":true}],"status_banner":"Re
 printf 'The project deadline is Friday.\nBudget unchanged.\nDeadline moved from Monday to Friday by the sponsor.\n' > "$TMP/notes.txt"
 printf 'Meeting moved to 3pm.\nInvoice 42 paid.\nServer restarted twice.\n' > "$TMP/inbox.txt"
 printf '12\n15\n11\n90\n13\n14\n12\n' > "$TMP/latencies.txt"
+mkdir -p "$TMP/tests/fixtures"
+cp "$PWD/tests/fixtures/screen.png" "$TMP/tests/fixtures/screen.png"
 export OLDPWD_REPO="$PWD"
 cd "$TMP"
 KIMIYA_MOCK=1 python3 -m kimiya run grounded_summary.kim | grep -q "COMMITTED" \
@@ -91,6 +99,24 @@ grep -q "python extension loaded" <<<"$out" \
 grep -q "p95=90" <<<"$out" || { echo "FAIL: pystats math wrong"; echo "$out"; exit 1; }
 test -f reading.txt || { echo "FAIL: reading.txt not written"; exit 1; }
 grep -q "^- n=" reading.txt || { echo "FAIL: bulletize (module fn) output"; exit 1; }
+
+echo "== image observation + multimodal gen =="
+iout=$(KIMIYA_MOCK=1 python3 -m kimiya run image_assess.kim)
+grep -q "COMMITTED" <<<"$iout" \
+  || { echo "FAIL: image_assess"; echo "$iout"; exit 1; }
+grep -q "image egress : none" <<<"$iout" \
+  || { echo "FAIL: local image egress not reported"; echo "$iout"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: image provenance"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+assert len(c["image_observations"]) == 1, c
+assert c["image_egress"] == [], c
+assert len(c["image_observations"][0]["sha"]) == 64, c
+PY
+KIMIYA_MOCK=1 python3 -m kimiya compile image_assess.kim --out ia.py >/dev/null
+icout=$(KIMIYA_MOCK=1 python3 ia.py)
+grep -q "COMMITTED" <<<"$icout" \
+  || { echo "FAIL: compiled image_assess"; echo "$icout"; exit 1; }
 
 echo "== screen surface: acts recorded, nothing delivered =="
 # KIMIYA_MOCK already implies driver=none, but be explicit: this test must

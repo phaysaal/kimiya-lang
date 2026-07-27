@@ -36,7 +36,7 @@ KNOWN_ACTIONS = {("file", "create"), ("file", "append"),
 # (mkdir takes 1, append takes 2), so only `screen` is pinned here.
 ACTION_ARITY = {("screen", a): n for a, n in screen.ACTIONS.items()}
 KNOWN_SURFACES = {"file", "screen"}
-OBSERVE_SURFACES = {"file", "screen"}
+OBSERVE_SURFACES = {"file", "screen", "image"}
 
 
 def _substmts(s) -> list[list]:
@@ -88,9 +88,16 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             if backend in ("anthropic", "claude_cli") and fk.get("url"):
                 r.warn(d.line, f"agent '{d.name}': 'url' is ignored on the "
                                f"{backend} backend")
-            if backend == "openrouter" and "key_env" not in fk:
+            if backend == "openrouter" and not (
+                    "key_env" in fk or "key_file" in fk):
                 r.warn(d.line, f"agent '{d.name}': openrouter without "
-                               "key_env — set key_env to a variable name")
+                               "key_env/key_file — declare a credential source")
+            if "key_env" in fk and "key_file" in fk:
+                r.err(d.line, f"agent '{d.name}': choose key_env or key_file, "
+                              "not both")
+            if "zdr" in fk and backend != "openrouter":
+                r.warn(d.line, f"agent '{d.name}': 'zdr' is only used by "
+                               "the openrouter backend")
             if backend == "openai" and "url" not in fk:
                 r.err(d.line, f"agent '{d.name}': openai backend needs a "
                               "url (the pod's /v1 endpoint)")
@@ -197,6 +204,8 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                               f"surface only — observe {e.surface}<"
                               f"{e.actor}> has no meaning")
             chk_actor(e.actor, e.line, f"observe {e.surface}")
+            if e.surface == "image" and len(e.args) != 1:
+                r.err(e.line, "observe image(...) takes exactly one path")
             for a in e.args:
                 chk_expr(a)
 
@@ -237,11 +246,17 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
     # has: name the instrument, state the purpose it reads under, and use
     # something that can actually see.
     screenshots: set[str] = set()
+    images: set[str] = set()
 
     def is_screenshot(e) -> bool:
         if isinstance(e, A.ObserveExpr):
             return e.surface == "screen"
         return isinstance(e, A.Var) and e.name in screenshots
+
+    def is_image(e) -> bool:
+        if isinstance(e, A.ObserveExpr):
+            return e.surface == "image"
+        return isinstance(e, A.Var) and e.name in images
 
     def chk_vision_select(sel: A.SelectExpr):
         if not is_screenshot(sel.store):
@@ -272,18 +287,18 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
     def chk_shows(g: A.JudgeGuard):
         if g.relation != "shows":
             return
-        if not is_screenshot(g.left):
+        if not (is_screenshot(g.left) or is_image(g.left)):
             r.err(g.line,
-                  "shows(...) takes a screenshot as its first argument "
-                  "(from `observe screen(...)`) — it is a claim about an "
-                  "image")
+                  "shows(...) takes an observed image as its first "
+                  "argument (from `observe screen(...)` or "
+                  "`observe image(...)`)")
         blind = [p for p in (g.panel or list(pools))
                  if p in can_see and not can_see[p]]
         if blind:
             r.err(g.line,
                   f"shows(...) panel member(s) {', '.join(blind)} are not "
-                  "vision-capable — they would vote on a screenshot they "
-                  "never saw. Declare `vision = true`, or panel only on "
+                  "vision-capable — they would vote on an image they never "
+                  "saw. Declare `vision = true`, or panel only on "
                   "agents that can see")
 
     # ---------- statements ----------
@@ -323,6 +338,15 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                 if rhs.by and rhs.by not in pools:
                     r.err(rhs.line, f"'by {rhs.by}': not a declared pool")
                 chk_expr(rhs.prompt)
+                if rhs.images is not None:
+                    chk_expr(rhs.images)
+                    gen_name = rhs.by or next(iter(pools), None)
+                    if gen_name in can_see and not can_see[gen_name]:
+                        r.err(rhs.line,
+                              f"'by {gen_name}': {pools[gen_name]} is not "
+                              "vision-capable — multimodal gen would ask it "
+                              "about images it cannot see. Declare "
+                              "`vision = true` if it can see")
             elif isinstance(rhs, A.SelectExpr):
                 if not 0 < rhs.recall <= 1:
                     r.err(rhs.line,
@@ -343,6 +367,10 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                 screenshots.add(s.name)
             else:
                 screenshots.discard(s.name)
+            if is_image(rhs):
+                images.add(s.name)
+            else:
+                images.discard(s.name)
         elif isinstance(s, (A.CheckStmt, A.PrintStmt, A.CommitStmt)):
             chk_expr(s.expr)
         elif isinstance(s, A.AbstainStmt):

@@ -1,0 +1,2 @@
+p := observe image("one.jpg", "two.jpg")
+commit(p)

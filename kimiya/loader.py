@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import sys
 from pathlib import Path
 
 from . import ast_nodes as A
@@ -83,9 +84,13 @@ def _load_python(target: Path, py_funcs, py_exts, line: int):
     if spec is None or spec.loader is None:
         raise LoadError(f"cannot load python extension {target}")
     module = importlib.util.module_from_spec(spec)
+    # Standard decorators such as dataclasses.dataclass resolve annotations
+    # through sys.modules while the module body executes.
+    sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as e:
+        sys.modules.pop(spec.name, None)
         raise LoadError(f"python extension {target.name} failed to load: "
                         f"{e}") from e
     exported = []

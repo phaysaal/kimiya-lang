@@ -141,8 +141,10 @@ class Compiler:
     def rhs(self, rhs, name):
         if isinstance(rhs, A.GenExpr):
             by = repr(rhs.by) if rhs.by else "None"
+            images = (self.expr(rhs.images)
+                      if rhs.images is not None else "None")
             return (f"rt.gen({rhs.schema!r}, {self.expr(rhs.prompt)}, {by}, "
-                    f"memo={rhs.memo})")
+                    f"images={images}, memo={rhs.memo})")
         if isinstance(rhs, A.SelectExpr):
             ctx = repr(rhs.context) if rhs.context else "None"
             by = repr(rhs.by) if rhs.by else "None"
@@ -280,6 +282,7 @@ class Compiler:
         self.emit("spec = importlib.util.spec_from_file_location("
                   "'kx_'+ext['sha'], ext['path'])")
         self.emit("m = importlib.util.module_from_spec(spec)")
+        self.emit("sys.modules[spec.name] = m")
         self.emit("spec.loader.exec_module(m)")
         self.emit("for name in ext['functions']:")
         self.emit("    rt.py_funcs[name] = getattr(m, name)")
@@ -316,6 +319,20 @@ class Compiler:
         self.emit("for a in remote:")
         self.emit("    print(f'⚠ egress: {a.name} → {a.model} @ "
                   "{a.host} ({a.backend})')")
+        image_statements = list(self._all_statements(self.prog.body))
+        for decl in self.prog.decls:
+            if isinstance(decl, A.FnDecl):
+                image_statements.extend(self._all_statements(decl.body))
+        has_images = any(
+            isinstance(s, A.Assign)
+            and isinstance(s.rhs, A.GenExpr)
+            and s.rhs.images is not None
+            for s in image_statements
+        )
+        if has_images:
+            self.emit("if remote:")
+            self.emit("    print('⚠ image egress: observed image pixels "
+                      "leave the machine when routed to a remote generator')")
         self.emit("env = dict(params)")
         self.emit("try:")
         self.indent += 1
@@ -331,6 +348,23 @@ class Compiler:
         self.emit("if __name__ == '__main__':")
         self.emit("    main()")
         return "\n".join(self.lines) + "\n"
+
+    def _all_statements(self, body):
+        for stmt in body:
+            yield stmt
+            if isinstance(stmt, A.IfStmt):
+                yield from self._all_statements(stmt.then)
+                if stmt.els:
+                    yield from self._all_statements(stmt.els)
+            elif isinstance(stmt, (A.ForallStmt, A.ExploreStmt, A.RetryStmt)):
+                yield from self._all_statements(stmt.body)
+                if isinstance(stmt, A.RetryStmt) and stmt.compensate:
+                    yield from self._all_statements(stmt.compensate)
+            elif (isinstance(stmt, A.Assign)
+                  and isinstance(stmt.rhs, A.RetryStmt)):
+                yield from self._all_statements(stmt.rhs.body)
+                if stmt.rhs.compensate:
+                    yield from self._all_statements(stmt.rhs.compensate)
 
 
 def compile_program(prog: A.Program, py_exts, source_file: str) -> str:

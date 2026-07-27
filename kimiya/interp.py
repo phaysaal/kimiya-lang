@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from . import ast_nodes as A
+from . import image as image_surface
 from . import screen
 from . import vision
 from ._version import __version__ as KIMIYA_VERSION
@@ -118,6 +119,7 @@ class Interp:
                     name=d.name, model=f.get("model", ""),
                     backend=f.get("backend", "ollama"),
                     url=f.get("url"), key_env=f.get("key_env"),
+                    key_file=f.get("key_file"), zdr=f.get("zdr", False),
                     family_override=f.get("family"),
                     vision_declared=f.get("vision"))
         if models_override:
@@ -136,6 +138,8 @@ class Interp:
         self.locates_cached = 0      # exact-sha hits: same image, free
         self.locates_replayed = 0    # replay hits: pixels changed, disclosed
         self.overclaims: list[str] = []
+        self.image_observations: list[dict] = []
+        self.image_egress: list[dict] = []
         self.committed = None
 
     def add_theta(self, name: str, factor: float):
@@ -199,6 +203,8 @@ class Interp:
                        for a in self.pool.agents],
             "egress": sorted({a.host for a in self.pool.agents
                               if not a.is_local}),
+            "image_observations": list(self.image_observations),
+            "image_egress": list(self.image_egress),
             "screen": ({"driver": screen.driver_name(),
                         "target": screen.target(),
                         "acts": self.screen_acts,
@@ -290,6 +296,23 @@ class Interp:
         agent = (self.pool.agent(g.by) if g.by
                  else self.pool.default_generator())
         self.last_gen_model = agent
+        image_paths = None
+        image_meta = []
+        if g.images is not None:
+            try:
+                image_paths, image_meta = image_surface.prepare(
+                    self.eval(g.images))
+            except image_surface.ImageError as ex:
+                raise Bolt(f"gen at line {g.line}: {ex}") from None
+            if image_paths and not agent.vision:
+                raise Bolt(
+                    f"gen at line {g.line}: agent {agent.name} "
+                    f"({agent.model}) is not vision-capable")
+            if image_paths and not agent.is_local:
+                for item in image_meta:
+                    entry = {"agent": agent.name, "host": agent.host, **item}
+                    if entry not in self.image_egress:
+                        self.image_egress.append(entry)
         fields = None
         if g.schema == "Text":
             fields = None
@@ -298,7 +321,9 @@ class Interp:
         else:
             fields = [f for f, _ in self.schemas[g.schema].fields]
         if g.memo:
-            key = MemoStore.key("gen", g.schema, prompt, agent.label())
+            image_key = ",".join(item["preview_sha"] for item in image_meta)
+            key = MemoStore.key("gen", g.schema, prompt, agent.label(),
+                                image_key)
             ent = self.memo.get(key)
             if ent is not None:
                 self.memo_hits += 1
@@ -309,9 +334,11 @@ class Interp:
         self.cost["gen_calls"] += 1
         if fields == []:
             out = run_gen(self.oracle, self.trace, agent,
-                          prompt + "\n\nFIELDS: result", ["result"])
+                          prompt + "\n\nFIELDS: result", ["result"],
+                          images=image_paths)
         else:
-            out = run_gen(self.oracle, self.trace, agent, prompt, fields)
+            out = run_gen(self.oracle, self.trace, agent, prompt, fields,
+                          images=image_paths)
         if g.memo and out is not None:
             self.memo.put(key, {"value": out, "agent": agent.label()})
         return out
@@ -394,23 +421,39 @@ class Interp:
         purpose = self.purpose_text(g.context)
         task = f"{g.relation}:{g.context}"
         images = None
+        image_meta = []
         if g.relation == "shows":
             shot = self.eval(g.left)
-            if not (isinstance(shot, dict) and shot.get("kind") == "screen"):
+            if not (isinstance(shot, dict)
+                    and shot.get("kind") in ("screen", "image")):
                 raise KimiyaRuntimeError(
-                    f"line {g.line}: shows(...) needs a screenshot as its "
-                    "first argument (from `observe screen(...)`)")
+                    f"line {g.line}: shows(...) needs an observed image "
+                    "as its first argument")
             if not shot.get("exists"):
                 raise Bolt(
-                    f"shows at line {g.line}: no screenshot to judge — "
-                    "`observe screen(...)` returned exists: false")
-            images = [shot["path"]]
-            left = (f"screenshot of {shot['region']} on {shot['display']}, "
+                    f"shows at line {g.line}: image observation returned "
+                    "exists: false")
+            if shot.get("kind") == "screen":
+                images = [shot["path"]]
+                left = (
+                    f"screenshot of {shot['region']} on {shot['display']}, "
                     f"{shot['width']}x{shot['height']} at origin "
-                    f"({shot['x']}, {shot['y']}), sha {shot['sha']}")
+                    f"({shot['x']}, {shot['y']}), sha {shot['sha']}"
+                )
+            else:
+                try:
+                    images, image_meta = image_surface.prepare([shot])
+                except image_surface.ImageError as ex:
+                    raise Bolt(f"shows at line {g.line}: {ex}") from None
+                left = (
+                    f"observed {shot['format']} image {shot['width']}x"
+                    f"{shot['height']}, source sha {shot['sha']}, "
+                    f"preview sha {shot['preview_sha']}"
+                )
             right = self.to_str(self.eval(g.right))
-            evidence, claim = left, f"The screenshot shows: {right}"
-            return self.run_guard(g, task, claim, evidence, purpose, images)
+            evidence, claim = left, f"The observed image shows: {right}"
+            return self.run_guard(
+                g, task, claim, evidence, purpose, images, image_meta)
         left = self.to_str(self.eval(g.left))
         right = self.to_str(self.eval(g.right)) if g.right is not None else ""
         if g.relation == "entails":
@@ -425,7 +468,8 @@ class Interp:
             evidence, claim = left, f"The value satisfies: {purpose}"
         return self.run_guard(g, task, claim, evidence, purpose)
 
-    def run_guard(self, g, task, claim, evidence, purpose, images=None):
+    def run_guard(self, g, task, claim, evidence, purpose, images=None,
+                  image_meta=None):
         memo_key = None
         if getattr(g, "memo", False):
             memo_key = MemoStore.key(
@@ -449,6 +493,16 @@ class Interp:
         j = run_judge(self.pool, self.oracle, self.trace, self.sheets,
                       task, claim, evidence, generator, g.k, g.tau,
                       purpose, g.panel, g.paraphrases, images)
+        if image_meta:
+            for voter in j.record.get("panel", []):
+                agent = self.pool.agent(voter["agent"])
+                if agent.is_local:
+                    continue
+                for item in image_meta:
+                    entry = {
+                        "agent": agent.name, "host": agent.host, **item}
+                    if entry not in self.image_egress:
+                        self.image_egress.append(entry)
         self.cost["judge_votes"] += g.k
         if not j.certified:
             self.uncertified += 1
@@ -659,6 +713,26 @@ class Interp:
         self.cost["observes"] += 1
         if e.surface == "screen":
             return self.observe_screen(e)
+        if e.surface == "image":
+            if len(e.args) != 1:
+                raise KimiyaRuntimeError(
+                    f"line {e.line}: observe image expects one path")
+            rec = image_surface.observe(
+                self.eval(e.args[0]), self.workspace / "images")
+            self.trace.append({
+                "kind": "observe", "surface": "image", "line": e.line,
+                **{k: v for k, v in rec.items() if k != "kind"},
+            })
+            if rec.get("exists"):
+                meta = {
+                    k: rec[k] for k in (
+                        "path", "sha", "preview_sha", "decoder",
+                        "width", "height", "format"
+                    )
+                }
+                if meta not in self.image_observations:
+                    self.image_observations.append(meta)
+            return rec
         path = Path(str(self.eval(e.args[0])))
         self.last_obs[str(path)] = time.time()
         if not path.exists():

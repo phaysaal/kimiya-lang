@@ -1,0 +1,10 @@
+agent A:
+    backend = "ollama"
+    model   = "llava:13b"
+    vision  = true
+
+schema Answer:
+    text: text
+
+a := gen<Answer>("Describe it.", images=["photo.jpg"]) by A
+commit(a)

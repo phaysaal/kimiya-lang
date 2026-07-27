@@ -16,6 +16,16 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## Unreleased
+- `observe image(path)` adds content-addressed image evidence with source and
+  preview SHA tracking.
+- `gen<Schema>(prompt, images=[...])` adds first-class multimodal generation;
+  image arguments must come from successful image observations.
+- JPEG and PNG use the standard-library observation provider. macOS `sips`
+  supplies the initial external Fujifilm RAF/RAW preview provider.
+- Certificates distinguish image observations from actual remote image
+  egress; interpreter and compiled artifacts share the same freshness checks.
+
 ## 1.4.0 — 2026-07-25
 - Compiled artifacts are version-stamped (`_COMPILED_WITH`) and checked
   at startup: MAJOR mismatch or artifact-newer-than-runtime refuses with

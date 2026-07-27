@@ -420,12 +420,22 @@ class Parser:
             self.expect("OP", ">")
             self.expect("OP", "(")
             prompt = self.expr()
+            images = None
+            if self.at("OP", ","):
+                self.next()
+                option = self.expect("NAME")
+                if option.value != "images":
+                    raise ParseError(
+                        f"line {option.line}: unknown gen option "
+                        f"'{option.value}' (known: images)")
+                self.expect("OP", "=")
+                images = self.expr()
             self.expect("OP", ")")
             by = None
             if self.at_kw("by"):
                 self.next()
                 by = self.expect("NAME").value
-            return A.GenExpr(schema, prompt, by, line=t.line)
+            return A.GenExpr(schema, prompt, by, images=images, line=t.line)
         if self.at_kw("select"):
             self.next()
             self.expect("OP", "<")

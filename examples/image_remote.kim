@@ -1,0 +1,17 @@
+-- Remote multimodal example. Kimiya announces prompt and pixel egress before
+-- sending the observed image to this declared OpenRouter agent.
+
+agent A:
+    backend = "openrouter"
+    model   = "google/gemini-2.5-flash"
+    key_env = "OPENROUTER_API_KEY"
+    vision  = true
+
+schema Assessment:
+    text: text
+
+photo := observe image("tests/fixtures/screen.png")
+check photo.exists
+a := gen<Assessment>("Describe only what is visibly present.", images=[photo]) by A
+check len(a.text) > 0
+commit(a)

@@ -73,7 +73,8 @@ class Agent:
     Backends: "ollama" (default; local unless url says otherwise),
     "openai" (any OpenAI-compatible /v1 endpoint — vLLM on a vast.ai pod,
     llama.cpp server, LM Studio), "openrouter". API keys never appear in
-    source; key_env names an environment variable.
+    source; key_env names an environment variable and key_file names a
+    runtime-only credential file.
     """
 
     name: str
@@ -81,6 +82,8 @@ class Agent:
     backend: str = "ollama"
     url: str | None = None
     key_env: str | None = None
+    key_file: str | None = None
+    zdr: bool = False
     family_override: str | None = None
     vision_declared: bool | None = None
 
@@ -315,6 +318,15 @@ def _b64(path) -> str:
     return base64.b64encode(Path(path).read_bytes()).decode()
 
 
+def _image_mime(path) -> str:
+    suffix = Path(path).suffix.lower()
+    return {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".webp": "image/webp",
+        ".gif": "image/gif",
+    }.get(suffix, "application/octet-stream")
+
+
 class Oracle:
     def __init__(self, timeout: int = 900):
         self.timeout = int(os.environ.get("KIMIYA_TIMEOUT", timeout))
@@ -369,7 +381,7 @@ class Oracle:
         content = []
         for p in images or []:
             content.append({"type": "image", "source": {
-                "type": "base64", "media_type": "image/png",
+                "type": "base64", "media_type": _image_mime(p),
                 "data": _b64(p)}})
         content.append({"type": "text", "text": prompt})
         kwargs = {"model": agent.model, "max_tokens": max_tokens,
@@ -451,19 +463,21 @@ class Oracle:
             parts = [{"type": "text", "text": prompt}]
             for p in images:
                 parts.append({"type": "image_url", "image_url": {
-                    "url": f"data:image/png;base64,{_b64(p)}"}})
+                    "url": f"data:{_image_mime(p)};base64,{_b64(p)}"}})
             messages.append({"role": "user", "content": parts})
         else:
             messages.append({"role": "user", "content": prompt})
         payload = {"model": agent.model, "messages": messages,
                    "temperature": temperature, "max_tokens": max_tokens}
+        if agent.backend == "openrouter" and agent.zdr:
+            payload["provider"] = {"zdr": True}
         headers = {"Content-Type": "application/json"}
-        if agent.key_env:
-            key = os.environ.get(agent.key_env, "")
+        if agent.key_env or agent.key_file:
+            key = _agent_api_key(agent)
             if not key:
-                raise RuntimeError(
-                    f"agent {agent.name}: environment variable "
-                    f"{agent.key_env} is not set")
+                source = (f"environment variable {agent.key_env}"
+                          if agent.key_env else f"credential file {agent.key_file}")
+                raise RuntimeError(f"agent {agent.name}: {source} is empty")
             headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(
             agent.resolved_url + "/chat/completions",
@@ -474,6 +488,54 @@ class Oracle:
         if not choices:
             return ""
         return (choices[0].get("message") or {}).get("content", "") or ""
+
+
+def _agent_api_key(agent: Agent) -> str:
+    """Load an API key without placing its value in source, traces, or errors.
+
+    Credential files may contain a raw token, KEY=value / export KEY=value,
+    or a small JSON object with an api_key, key, token, or named key_env
+    member. This deliberately returns only the value and never logs it.
+    """
+    if agent.key_env:
+        return os.environ.get(agent.key_env, "").strip()
+    path = Path(agent.key_file).expanduser()
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(
+            f"agent {agent.name}: cannot read credential file {path}: "
+            f"{exc.strerror or type(exc).__name__}") from None
+    if not text:
+        return ""
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                f"agent {agent.name}: credential file {path} is invalid JSON"
+            ) from None
+        names = [agent.key_env, "OPENROUTER_API_KEY", "api_key", "key",
+                 "token"]
+        for name in names:
+            if name and isinstance(data.get(name), str):
+                return data[name].strip()
+        raise RuntimeError(
+            f"agent {agent.name}: credential file {path} has no recognized "
+            "key field")
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" in line:
+            name, value = line.split("=", 1)
+            if not agent.key_env or name.strip() == agent.key_env:
+                return value.strip().strip("\"'")
+        elif len(text.splitlines()) == 1:
+            return line
+    return ""
 
 
 class MockOracle(Oracle):
@@ -612,14 +674,18 @@ def run_judge(pool: Pool, oracle: Oracle, trace: Trace, sheets: Datasheets,
 
 
 def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
-            schema_fields: list[str] | None, budget: int = 3):
+            schema_fields: list[str] | None, budget: int = 3,
+            images: list | None = None):
     """schema_fields None => free text; else JSON with those fields."""
     who = agent.label()
     if schema_fields is None:
         try:
-            out = oracle.complete(agent, prompt, temperature=0.3)
+            out = oracle.complete(agent, prompt, temperature=0.3,
+                                  images=images)
             trace.append({"kind": "gen", "agent": who,
-                          "prompt_hash": h(prompt), "ok": True})
+                          "prompt_hash": h(prompt), "ok": True,
+                          **({"images": [str(p) for p in images]}
+                             if images else {})})
             return out.strip()
         except (OSError, RuntimeError) as e:
             trace.append({"kind": "gen", "agent": who,
@@ -631,7 +697,8 @@ def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
     for attempt in range(budget):
         try:
             out = oracle.complete(agent, full, system=GEN_SYSTEM,
-                                  temperature=0.3 + 0.2 * attempt)
+                                  temperature=0.3 + 0.2 * attempt,
+                                  images=images)
         except (OSError, RuntimeError) as e:
             trace.append({"kind": "gen", "agent": who, "attempt": attempt,
                           "prompt_hash": h(full), "ok": False,
@@ -647,7 +714,9 @@ def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
             continue
         if all(f in obj for f in schema_fields):
             trace.append({"kind": "gen", "agent": who, "attempt": attempt,
-                          "prompt_hash": h(full), "ok": True})
+                          "prompt_hash": h(full), "ok": True,
+                          **({"images": [str(p) for p in images]}
+                             if images else {})})
             return obj
     trace.append({"kind": "gen", "agent": who, "prompt_hash": h(full),
                   "ok": False, "budget_exhausted": True})

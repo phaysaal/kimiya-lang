@@ -69,7 +69,7 @@ class UnOp:
 
 @dataclass
 class ObserveExpr:
-    surface: str          # "file" | "screen"
+    surface: str          # "file" | "screen" | "image"
     args: list
     actor: str | None = None   # `observe screen<A>(...)` — a declared display
     line: int = 0
@@ -175,6 +175,7 @@ class GenExpr:
     schema: str
     prompt: object
     by: str | None
+    images: object | None = None  # list of records from `observe image(...)`
     memo: bool = False    # exact-input reuse: same prompt -> same artifact
     line: int = 0
 

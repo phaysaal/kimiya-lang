@@ -98,6 +98,26 @@ def _screen_observes(prog) -> bool:
     return found[0]
 
 
+def _has_multimodal_gen(prog) -> bool:
+    """Does any reachable source body declare `gen(..., images=...)`?"""
+    from .checker import _substmts
+    found = [False]
+
+    def walk(stmts):
+        for stmt in stmts:
+            rhs = getattr(stmt, "rhs", None)
+            if isinstance(rhs, A.GenExpr) and rhs.images is not None:
+                found[0] = True
+            for sub in _substmts(stmt):
+                walk(sub)
+
+    walk(prog.body)
+    for decl in prog.decls:
+        if isinstance(decl, A.FnDecl):
+            walk(decl.body)
+    return found[0]
+
+
 def _announce_screen(prog):
     """GUI control is a world effect on the user's own machine; say so
     before it happens, the way remote egress is announced."""
@@ -194,6 +214,10 @@ def cmd_run(args):
         if _screen_observes(prog):
             print("  ⚠ this program also captures the screen — those "
                   "screenshots leave the machine for the agents above")
+        if _has_multimodal_gen(prog):
+            print("  ⚠ image egress: this program contains multimodal "
+                  "generation — observed image pixels leave the machine "
+                  "when routed to a remote generator")
     cert = interp.run()
     print()
     print("── certificate ──────────────────────────────")
@@ -218,6 +242,12 @@ def cmd_run(args):
               "(prompts left the machine)")
     else:
         print("  egress : none (all agents local)")
+    if cert.get("image_egress"):
+        disclosures = cert["image_egress"]
+        print(f"  image egress : {len(disclosures)} observed image "
+              "disclosure(s)")
+    elif cert.get("image_observations"):
+        print("  image egress : none (observed pixels stayed local)")
     if cert.get("memo_hits"):
         print(f"  memo   : {cert['memo_hits']} reuse(s) — identical "
               "readings, factors counted once")

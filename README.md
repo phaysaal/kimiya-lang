@@ -76,11 +76,9 @@ a vast.ai pod instead, see **Agents** below.
 - **Python version.** macOS's system `python3` may be 3.9. If
   `python3 --version` is below 3.11, `brew install python@3.12` and use
   that interpreter.
-- **Don't start with `tests/smoke_test.sh`.** It uses bash associative
-  arrays (`declare -A`, bash 4+), but macOS ships bash 3.2 — the script
-  will error. The `python3 -m kimiya …` commands above are pure Python and
-  have no such issue. If you want the smoke test, `brew install bash`
-  first.
+- **Smoke tests.** `tests/smoke_test.sh` is compatible with the Bash 3.2
+  shipped by macOS; it uses the offline mock oracle and never contacts a
+  model service.
 - **No build step.** The interpreter and the compiler are pure-stdlib
   Python with no native code, so nothing to compile or install; clone and
   run. The compiled `.py` artifacts only import `kimiya.compiled_runtime`.
@@ -663,7 +661,7 @@ spent — without false positives. Anything it cannot pin down is
 
 - `gen<Schema>` yields a record with the schema's fields; `gen<Text>`
   yields text; `observe file(...)` yields `{text, path, exists, mtime,
-  sha}`;
+  sha}`; `observe image(...)` yields a content-addressed image record;
 - `select` / `lines` / `keys` / `range` yield lists; `join` / `lower` /
   `trim` / `str` yield text; `len` / `num` yield num; and so on.
 
@@ -675,6 +673,7 @@ So it rejects, at compile time:
 | field access on a scalar | `t.text` where `t := gen<Text>(…)` |
 | `forall` over a text | `forall c in notes.text:` (needs `lines(...)`) |
 | `select` over a non-list | `select<…>(q, notes.text)` (needs `lines(...)`) |
+| raw paths passed as images | `gen<S>(p, images=["a.jpg"])` (needs `observe image`) |
 
 It is deliberately *not* the paper's purpose/tolerance type system (the
 graded-effect discipline for substitution safety, supplement A.9): that
@@ -700,9 +699,9 @@ stmt     := NAME := rhs | check E | print E | commit(E) | abstain
           | retry budget N until GUARD: BLOCK [inv E] [compensate: BLOCK]
           | act[<ACTOR>] SURFACE.ACTION(args)
           | settle[<ACTOR>] until GUARD within SECONDS
-rhs      := [memo] gen<SCHEMA>(E) [by POOL]
+rhs      := [memo] gen<SCHEMA>(E [, images=E]) [by POOL]
           | select<RECALL>(E, E) [under CTX]
-          | observe file(E)
+          | observe (file|image)(E)
           | retry ...            -- value = body's last assignment
           | E
 GUARD    := check E

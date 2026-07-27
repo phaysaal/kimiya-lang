@@ -10,6 +10,8 @@ What it knows:
 - gen<Schema> yields a closed record with the schema's fields.
 - observe file(...) yields the observation record
   {text, path, exists, mtime, sha}.
+- observe image(...) yields a content-addressed image observation; the
+  optional `images` argument on gen accepts only lists of those records.
 - select yields a list; lines/keys/range yield lists; join/lower/trim/str
   yield text; len/num/now yield num; contains/starts_with/file_exists
   yield bool.
@@ -97,6 +99,13 @@ SCREENSHOT = RecordTy(
      "width": NUM, "height": NUM, "x": NUM, "y": NUM,
      "display": TEXT, "region": TEXT, "driver": TEXT},
     origin="screenshot")
+
+IMAGE = RecordTy(
+    {"kind": TEXT, "path": TEXT, "sha": TEXT, "exists": BOOL,
+     "mtime": NUM, "width": NUM, "height": NUM, "format": TEXT,
+     "mime": TEXT, "preview_path": TEXT, "preview_sha": TEXT,
+     "decoder": TEXT, "reason": TEXT},
+    origin="image observation")
 
 # What a vision `select` yields: x/y are the control's centre in absolute
 # screen coordinates, ready to hand to `act screen.click`.
@@ -200,7 +209,11 @@ def typecheck(prog: A.Program) -> TypeReport:
                 return base.elem
             return UNKNOWN
         if isinstance(e, A.ObserveExpr):
-            return SCREENSHOT if e.surface == "screen" else OBSERVATION
+            if e.surface == "screen":
+                return SCREENSHOT
+            if e.surface == "image":
+                return IMAGE
+            return OBSERVATION
         if isinstance(e, A.Call):
             return ty_call(e, env)
         if isinstance(e, A.BinOp):
@@ -243,6 +256,15 @@ def typecheck(prog: A.Program) -> TypeReport:
 
     def ty_rhs(rhs, env) -> Ty:
         if isinstance(rhs, A.GenExpr):
+            if rhs.images is not None:
+                it = ty(rhs.images, env)
+                if not isinstance(it, ListTy):
+                    r.err(rhs.line, f"gen images is {it!r}, expected "
+                                    "list<image observation>")
+                elif it.elem is not UNKNOWN and it.elem != IMAGE:
+                    r.err(rhs.line, f"gen images is {it!r}, expected "
+                                    "list<image observation> from "
+                                    "`observe image(...)`")
             if rhs.schema in schemas:
                 return schemas[rhs.schema]
             if rhs.schema == "Text":

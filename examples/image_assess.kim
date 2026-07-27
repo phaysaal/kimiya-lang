@@ -1,0 +1,18 @@
+-- Minimal multimodal generation example. Image pixels enter through an
+-- explicit observation and stay local with this Ollama agent.
+
+agent A:
+    backend = "ollama"
+    model   = "llava:13b"
+    vision  = true
+
+schema Assessment:
+    text: text
+
+photo := observe image("tests/fixtures/screen.png")
+check photo.exists
+
+a := gen<Assessment>("Describe only what is visibly present in this image.", images=[photo]) by A
+
+check len(a.text) > 0
+commit(a)
