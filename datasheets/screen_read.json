@@ -1,0 +1,18 @@
+{
+  "read:k_read": {
+    "alpha_hi": 0.1611,
+    "beta_lo": 0.9398,
+    "n_true": 60,
+    "n_false": 20,
+    "source": "screen-read campaign, 60 present + 20 absent rendered trials, claude_cli claude-opus-4-8, seed 42, 2026-07-27",
+    "detail": {
+      "true_reads": 60,
+      "misses": 0,
+      "false_reads_on_absent": 0,
+      "beta_hat": 1.0,
+      "latency_s_p50": 6.6,
+      "latency_s_p90": 9.3,
+      "ground_truth": "rendered screens; exact string match"
+    }
+  }
+}

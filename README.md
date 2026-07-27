@@ -184,6 +184,25 @@ the certificate as `image egress` (with `surface: screen` and the seat,
 when the pixels were a display). Full design:
 `docs/image-observation-and-multimodal-generation.md`.
 
+**The screen-read is a measured instrument.** A rendered-ground-truth
+campaign (`tools/read_campaign.py`; audit log in `datasheets/`) measured
+Opus 4.8 through the `claude_cli` path at **β≥0.9398** (60/60 exact
+reads, Wilson95) and **α≤0.1611** (0/20 invented codes on code-free
+screens, including 8-letter word bait), p50 6.6 s. Install it into a
+workspace with:
+
+```sh
+python3 -m kimiya datasheet datasheets/screen_read.json .kimiya
+```
+
+One honest design note: reads arrive through `gen`, and `gen`
+contributes no θ factor — a read is *untrusted by design* and the gates
+after it (kernel checks, judges) carry the warrant, exactly as the
+two-user scenario treats its join code. Whether a multimodal read should
+enter θ at the measured rate directly — like a locate does — is an open
+question deliberately not decided here; the datasheet exists either way,
+and the `read:k_read` task name reserves the slot.
+
 ## Search: `explore` and `memo`
 
 Two constructs make heuristic search — greedy, DP-style reuse,

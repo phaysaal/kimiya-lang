@@ -16,6 +16,19 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## Unreleased
+- Read-accuracy campaign for the grounded screen-read
+  (`tools/read_campaign.py`): 60 present + 20 absent rendered trials
+  against kernel-grade ground truth, via the real language path
+  (`observe screen` fixture → `gen images=` → `claude_cli` Opus 4.8).
+  Result: 60/60 exact reads (β≥0.9398 Wilson95), 0/20 false reads on
+  code-free screens (α≤0.1611), p50 6.6 s. Installable sheet with
+  embedded provenance in `datasheets/screen_read.json`
+  (`kimiya datasheet datasheets/screen_read.json .kimiya`); per-trial
+  audit log alongside. The `read:` task family is recorded for the
+  instrument; reads remain untrusted gen by design — wiring a read
+  factor into θ is an open design question, noted in the README.
+
 ## 1.5.0 — 2026-07-27
 - `observe image(path)` adds content-addressed image evidence with source and
   preview SHA tracking.
