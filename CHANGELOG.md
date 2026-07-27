@@ -16,7 +16,7 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
-## Unreleased
+## 1.5.0 — 2026-07-27
 - `observe image(path)` adds content-addressed image evidence with source and
   preview SHA tracking.
 - `gen<Schema>(prompt, images=[...])` adds first-class multimodal generation;
@@ -25,6 +25,10 @@ surface may change between MINOR versions. The compatibility contract:
   supplies the initial external Fujifilm RAF/RAW preview provider.
 - Certificates distinguish image observations from actual remote image
   egress; interpreter and compiled artifacts share the same freshness checks.
+- Screenshots feed `gen` directly: `gen<Schema>(prompt,
+  images=[observe screen<A>()])` — the grounded screen-read. Freshness
+  compares the screenshot's recorded SHA; remote routing is disclosed as
+  image egress with `surface: screen` and the seat.
 
 ## 1.4.0 — 2026-07-25
 - Compiled artifacts are version-stamped (`_COMPILED_WITH`) and checked

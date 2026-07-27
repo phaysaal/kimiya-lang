@@ -218,13 +218,44 @@ def prepare(records) -> tuple[list[str], list[dict]]:
     metadata: list[dict] = []
     total = 0
     for index, record in enumerate(records):
-        if not isinstance(record, dict) or record.get("kind") != "image":
+        if not isinstance(record, dict) or \
+                record.get("kind") not in ("image", "screen"):
             raise ImageError(
                 f"gen images item {index + 1} is not from "
-                "`observe image(...)`")
+                "`observe image(...)` or `observe screen(...)`")
         if not record.get("exists"):
             reason = record.get("reason") or "observation failed"
             raise ImageError(f"image {record.get('path', '')}: {reason}")
+        if record["kind"] == "screen":
+            # The grounded screen-read: a screenshot observation feeds gen
+            # directly. Screenshots are already sized PNGs, so the source
+            # doubles as its own preview; the record's SHA is a 12-hex
+            # prefix, so freshness compares by prefix.
+            source = Path(record["path"])
+            if not source.exists() or \
+                    not _sha(source).startswith(record.get("sha", "?")):
+                raise ImageError(
+                    f"screenshot changed after observation: {source}")
+            size = source.stat().st_size
+            if size > MAX_PREVIEW_BYTES:
+                raise ImageError(
+                    f"screenshot exceeds {MAX_PREVIEW_BYTES} bytes: "
+                    f"{source}")
+            total += size
+            if total > MAX_TOTAL_PREVIEW_BYTES:
+                raise ImageError(
+                    f"image previews exceed {MAX_TOTAL_PREVIEW_BYTES} "
+                    "bytes for one model call")
+            paths.append(str(source))
+            metadata.append({
+                "path": str(source),
+                "sha": record["sha"],
+                "preview_sha": record["sha"],
+                "decoder": "screen:" + str(record.get("driver", "")),
+                "surface": "screen",
+                "seat": record.get("actor", "default"),
+            })
+            continue
         source = Path(record["path"])
         preview = Path(record["preview_path"])
         if not source.exists() or _sha(source) != record.get("sha"):

@@ -11,7 +11,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.4.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.5.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.4.0`; compiled runs
 also record the compiler version, and an artifact refuses to run across
@@ -163,6 +163,26 @@ commit(s)
 instruments start **prior-grade** and tighten as you label judgments with
 `calibrate`. Judgments without a cross-provenance panel run but are
 flagged UNCERTIFIED (self-judgment never certifies).
+
+## Images: `observe image` and multimodal `gen`
+
+```
+photo := observe image("DSC_1001.jpg")     -- content-addressed: sha, size, preview
+shot  := observe screen<A>()               -- a screenshot is an image observation too
+a := gen<Assessment>("What does this show?", images=[photo, shot]) by V
+```
+
+Image pixels enter through observations only — a raw path in `images=`
+is a type error. Records carry the source SHA and are re-verified before
+every model call (a file that changed after observation aborts, never
+silently ships stale pixels). JPEG/PNG decode with the stdlib; macOS
+`sips` is the first external provider (Fujifilm RAF). Feeding a
+**screenshot** to `gen` is the grounded screen-read — reading a value
+off the display through a declared, vision-capable generator. Remote
+routing of observed pixels is disclosed before the run and recorded in
+the certificate as `image egress` (with `surface: screen` and the seat,
+when the pixels were a display). Full design:
+`docs/image-observation-and-multimodal-generation.md`.
 
 ## Search: `explore` and `memo`
 

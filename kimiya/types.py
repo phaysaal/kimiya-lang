@@ -11,7 +11,8 @@ What it knows:
 - observe file(...) yields the observation record
   {text, path, exists, mtime, sha}.
 - observe image(...) yields a content-addressed image observation; the
-  optional `images` argument on gen accepts only lists of those records.
+  optional `images` argument on gen accepts lists of those records or of
+  screenshots from observe screen(...) — the grounded screen-read.
 - select yields a list; lines/keys/range yield lists; join/lower/trim/str
   yield text; len/num/now yield num; contains/starts_with/file_exists
   yield bool.
@@ -261,10 +262,12 @@ def typecheck(prog: A.Program) -> TypeReport:
                 if not isinstance(it, ListTy):
                     r.err(rhs.line, f"gen images is {it!r}, expected "
                                     "list<image observation>")
-                elif it.elem is not UNKNOWN and it.elem != IMAGE:
+                elif (it.elem is not UNKNOWN
+                      and it.elem not in (IMAGE, SCREENSHOT)):
                     r.err(rhs.line, f"gen images is {it!r}, expected "
                                     "list<image observation> from "
-                                    "`observe image(...)`")
+                                    "`observe image(...)` or "
+                                    "`observe screen(...)`")
             if rhs.schema in schemas:
                 return schemas[rhs.schema]
             if rhs.schema == "Text":

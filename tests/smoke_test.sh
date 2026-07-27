@@ -404,6 +404,30 @@ c = json.load(open(".kimiya/certificate.json"))
 assert len(c["theta_factors"]) == 1, c["theta_factors"]
 PY
 
+echo "== grounded screen-read: screenshots feed gen =="
+cat > sread.kim <<'KIM'
+agent A:
+    backend = "ollama"
+    model   = "llava:13b"
+    vision  = true
+schema Reading:
+    text: text
+shot := observe screen("eDP-1")
+check shot.exists
+r := gen<Reading>("Read the code shown.", images=[shot]) by A
+check len(r.text) > 0
+commit(r)
+KIM
+srout=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+        python3 -m kimiya run sread.kim)
+grep -q "COMMITTED" <<<"$srout" \
+  || { echo "FAIL: screen-read"; echo "$srout"; exit 1; }
+KIMIYA_MOCK=1 python3 -m kimiya compile sread.kim --out srd.py >/dev/null
+srct=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+       python3 srd.py)
+grep -q "COMMITTED" <<<"$srct" \
+  || { echo "FAIL: compiled screen-read"; echo "$srct"; exit 1; }
+
 echo "== artifact versioning: stamp + compatibility gate =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gv.py >/dev/null
 grep -q "_COMPILED_WITH = " gv.py \
