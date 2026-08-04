@@ -16,6 +16,30 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.7.0 — 2026-08-04
+- **Breaking (θ):** text `select` is now a priced instrument, closing the
+  one place where θ took a claim instead of a measurement. Its factor
+  enters θ under `select:<purpose>` at the datasheet's conservative end
+  (prior-grade β≥0.60 until measured), exactly like the vision locate
+  path — **not** at the recall written in the source. The declared
+  recall stays the programmer's coverage claim and is checked against
+  the measured end on every run (the same overclaim warning the locate
+  path prints). A select without `under <purpose>` lands at
+  `select:unscoped` (prior grade) with a check-time nudge. Certificates
+  for existing programs will show lower θ (the §5.2 example drops from
+  0.57 to 0.36 on a fresh workspace) — deliberately conservative, never
+  overstating; install a measured retrieval sheet
+  (`kimiya datasheet sheets.json .kimiya --source "…"`) to earn it back.
+  Rationale: the paper defines `select<ρ_r>`'s recall as
+  datasheet-stamped (Definition "Retrieval oracle"), and the Coq
+  soundness theorem assumes the oracle meets its datasheet
+  (`seldist_recall`); carrying an unmeasured claim into θ violated that
+  premise. Mechanical recall-1 retrieval remains the kernel path
+  (`filter`, `contains`) and stays factor-free.
+- `select:<task>` instruments now appear in the certificate's
+  `instruments` block with their calibration status and provenance,
+  like every other instrument.
+
 ## 1.6.0 — 2026-07-27
 - **Semantics (θ):** multimodal `gen` is now a *priced read* — a `gen`
   that consumes images contributes one θ factor at its datasheet's

@@ -265,6 +265,12 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                        f"'by {sel.by}' on a select over a non-screen store "
                        "has no effect — text select is a mechanical filter, "
                        "no model is consulted")
+            if not sel.context:
+                r.warn(sel.line,
+                       "select is a retrieval instrument; without `under "
+                       "<purpose>` its factor lands at select:unscoped "
+                       "(prior grade) — declare a purpose to key a "
+                       "measured datasheet")
             return
         if not sel.by:
             r.err(sel.line,

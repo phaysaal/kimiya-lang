@@ -186,8 +186,7 @@ class Interp:
         # report it under the instrument's own name, not "neg:…", which
         # has no datasheet and would print as prior-grade.
         tasks = sorted({name[4:] if name.startswith("neg:") else name
-                        for name, _ in self.theta
-                        if not name.startswith("select")})
+                        for name, _ in self.theta})
         return {
             "status": status,
             "reason": reason,
@@ -380,8 +379,21 @@ class Interp:
 
         hits = [x for x in sorted(store, key=lambda x: -score(x))
                 if score(x) > 0] or list(store)
-        self.add_theta(f"select<{sel.recall}>", sel.recall)
-        self.trace.append({"kind": "select", "recall": sel.recall,
+        task = f"select:{sel.context or 'unscoped'}"
+        sheet = self.sheets.get(task)
+        self.add_theta(task, sheet["beta_lo"])
+        if sel.recall > sheet["beta_lo"]:
+            note = (f"line {sel.line}: declared recall {sel.recall} exceeds "
+                    f"the measured β≥{sheet['beta_lo']:.3f} of instrument "
+                    f"{task} — θ uses the measured end, not the claim")
+            if note not in self.overclaims:
+                self.overclaims.append(note)
+            self.trace.append({"kind": "overclaim", "task": task,
+                               "declared_recall": sel.recall,
+                               "measured_beta_lo": sheet["beta_lo"],
+                               "line": sel.line})
+        self.trace.append({"kind": "select", "task": task,
+                           "recall": sel.recall,
                            "store_size": len(store), "hits": len(hits),
                            "line": sel.line})
         return hits

@@ -252,8 +252,19 @@ class Runtime:
 
         hits = [x for x in sorted(store, key=lambda x: -score(x))
                 if score(x) > 0] or list(store)
-        self.add_theta(f"select<{recall}>", recall)
-        self.trace.append({"kind": "select", "recall": recall,
+        task = f"select:{ctx or 'unscoped'}"
+        sheet = self.sheets.get(task)
+        self.add_theta(task, sheet["beta_lo"])
+        if recall > sheet["beta_lo"]:
+            note = (f"declared recall {recall} exceeds the measured "
+                    f"β≥{sheet['beta_lo']:.3f} of instrument {task} — θ "
+                    "uses the measured end, not the claim")
+            if note not in self.overclaims:
+                self.overclaims.append(note)
+            self.trace.append({"kind": "overclaim", "task": task,
+                               "declared_recall": recall,
+                               "measured_beta_lo": sheet["beta_lo"]})
+        self.trace.append({"kind": "select", "task": task, "recall": recall,
                            "store_size": len(store), "hits": len(hits)})
         return hits
 
@@ -551,8 +562,7 @@ class Runtime:
         for _, x in self.theta:
             theta *= x
         tasks = sorted({n[4:] if n.startswith("neg:") else n
-                        for n, _ in self.theta
-                        if not n.startswith("select")})
+                        for n, _ in self.theta})
         egress = sorted({a.host for a in self.pool.agents if not a.is_local})
         cert = {
             "status": status, "reason": reason, "value": self.committed,

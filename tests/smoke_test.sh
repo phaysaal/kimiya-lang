@@ -458,6 +458,44 @@ tgo=$(KIMIYA_MOCK=1 python3 -m kimiya run tg.kim)
 grep -q "factors: \[\]" <<<"$tgo" \
   || { echo "FAIL: text gen gained a factor"; echo "$tgo"; exit 1; }
 
+echo "== priced retrieval: text select is an instrument =="
+# prior-grade: theta takes the datasheet end, not the declared recall
+sel1=$(KIMIYA_MOCK=1 python3 -m kimiya run grounded_summary.kim)
+grep -q "declared recall 0.95 exceeds the measured" <<<"$sel1" \
+  || { echo "FAIL: select overclaim not reported"; echo "$sel1"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: text select not priced at the datasheet end"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+d = dict(c["theta_factors"])
+assert d.get("select:k_ev") == 0.6, c["theta_factors"]
+assert "select:k_ev" in c["instruments"], list(c["instruments"])
+assert c["theta"] == 0.36, c["theta"]
+PY
+# a measured retrieval sheet moves theta and clears the overclaim
+cat > selsheet.json <<'JSON'
+{"select:k_ev": {"alpha_hi": 0.2, "beta_lo": 0.95, "n_true": 200, "n_false": 40}}
+JSON
+python3 -m kimiya datasheet selsheet.json .kimiya --source "retrieval campaign" >/dev/null
+sel2=$(KIMIYA_MOCK=1 python3 -m kimiya run grounded_summary.kim)
+grep -q "measured: retrieval campaign" <<<"$sel2" \
+  || { echo "FAIL: retrieval provenance not cited"; echo "$sel2"; exit 1; }
+grep -q "declared recall" <<<"$sel2" \
+  && { echo "FAIL: overclaim persists at beta=0.95"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: theta did not take the measured recall"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+assert c["theta"] == 0.57, c["theta"]
+PY
+# unscoped select: check-time nudge, prior-grade factor
+printf 'pool A = "llama3.1:8b"\nx := select<0.9>("q", ["a","b"])\ncheck len(x) > 0\ncommit(first(x))\n' > selu.kim
+python3 -m kimiya check selu.kim | grep -q "select:unscoped" \
+  || { echo "FAIL: unscoped select nudge missing"; exit 1; }
+# compiled artifact: identical pricing
+KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gsel.py >/dev/null
+sel3=$(KIMIYA_MOCK=1 python3 gsel.py)
+grep -q "('select:k_ev', 0.95)" <<<"$sel3" \
+  || { echo "FAIL: compiled select pricing"; echo "$sel3"; exit 1; }
+
 echo "== artifact versioning: stamp + compatibility gate =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gv.py >/dev/null
 grep -q "_COMPILED_WITH = " gv.py \

@@ -11,7 +11,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.6.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.7.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.4.0`; compiled runs
 also record the compiler version, and an artifact refuses to run across
@@ -152,10 +152,13 @@ commit(s)
 ```
 ── certificate ──────────────────────────────
   status : COMMITTED
-  θ      : 0.57   (factors: [('select<0.95>', 0.95), ('entails:k_ev', 0.6)])
+  θ      : 0.36   (factors: [('select:k_ev', 0.6), ('entails:k_ev', 0.6)])
   instrument entails:k_ev: α≤0.25 β≥0.60 [prior-grade]
+  instrument select:k_ev: α≤0.25 β≥0.60 [prior-grade]
+  ⚠ line 19: declared recall 0.95 exceeds the measured β≥0.600 of
+    instrument select:k_ev — θ uses the measured end, not the claim
   cost   : 1 gen, 5 votes, 0 acts, 1 observes, 84.2s
-  trace  : 9 records (.kimiya/trace.jsonl)
+  trace  : 7 records (.kimiya/trace.jsonl)
 ─────────────────────────────────────────────
 ```
 
@@ -163,6 +166,16 @@ commit(s)
 instruments start **prior-grade** and tighten as you label judgments with
 `calibrate`. Judgments without a cross-provenance panel run but are
 flagged UNCERTIFIED (self-judgment never certifies).
+
+**Retrieval is priced like everything else (since 1.7).** The `0.95` in
+`select<0.95>` is the programmer's coverage claim; θ takes the
+`select:<purpose>` datasheet's conservative end — prior-grade 0.60 until
+a retrieval campaign measures it — and the run says so whenever the
+claim exceeds the measurement. Install a measured sheet
+(`kimiya datasheet sheets.json .kimiya --source "…"`) and θ rises to the
+measured recall (here: to 0.57 at β≥0.95). When relevance is
+mechanically decidable, use the kernel path instead — `filter` /
+`contains` are recall-1 retrieval at certainty 1, factor-free.
 
 ## Images: `observe image` and multimodal `gen`
 
@@ -821,9 +834,11 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
 
 ## Honest limitations (v0.1)
 
-- `select` is a mechanical keyword filter over a list; the declared
-  recall is carried into the certificate but is the *programmer's* claim
-  about this retrieval, not a measured property of the filter.
+- Text `select`'s *mechanism* is still a keyword filter — a weak
+  retriever. Since 1.7 its θ factor is honest about that (the
+  `select:<purpose>` datasheet's conservative end, prior-grade until
+  measured), but a measured sheet must come from a real retrieval
+  campaign; `calibrate` does not yet label per-item relevance.
 - θ accounting is the simple per-step conservative product; abstention
   probability is not separately bounded.
 - Retry snapshot semantics restores *program* state only (correct per the
@@ -833,9 +848,6 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
 - Two surfaces (`file`, `screen`). Sockets, processes, and clipboard are
   future surfaces; each will need its own effect classes and delivery
   contracts.
-- `select` over a **text** store is still a mechanical keyword filter and
-  its declared recall is still the programmer's claim. Only the vision
-  path is instrument-backed.
 - Remote (`ssh`) seats need key-based auth (BatchMode — the harness
   fails fast rather than hanging on a password prompt), xdotool, and
   maim or ImageMagick on the remote host. Latency per act is one ssh
