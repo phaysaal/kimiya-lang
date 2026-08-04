@@ -30,7 +30,8 @@ from . import screen
 from . import vision
 from ._version import __version__ as KIMIYA_VERSION
 from .runtime import (Pool, Agent, Trace, Datasheets, MemoStore,
-                      get_oracle, run_judge, resolve_params, run_gen)
+                      get_oracle, run_judge, resolve_params, run_gen,
+                      Secret, redact_value)
 
 
 class Bolt(Exception):
@@ -190,7 +191,7 @@ class Interp:
         return {
             "status": status,
             "reason": reason,
-            "value": self.committed,
+            "value": redact_value(self.committed),
             "theta": round(theta, 4),
             "theta_factors": [(n, round(f, 4)) for n, f in self.theta],
             "uncertified_judgments": self.uncertified,
@@ -215,7 +216,7 @@ class Interp:
                                    for n, d in self.displays.items()}}
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
-            "params": dict(self.cli_params),
+            "params": redact_value(dict(self.cli_params)),
             "kimiya_version": KIMIYA_VERSION,
             "memo_hits": self.memo_hits,
             "explored": self.theta_excluded,
@@ -238,7 +239,9 @@ class Interp:
             if not v:
                 raise Bolt(f"check failed at line {s.line}")
         elif isinstance(s, A.PrintStmt):
-            print(self.to_str(self.eval(s.expr)))
+            v = self.eval(s.expr)
+            print(v.redacted() if isinstance(v, Secret)
+                  else self.to_str(v))
         elif isinstance(s, A.CommitStmt):
             if self.explore_depth > 0:
                 raise KimiyaRuntimeError(

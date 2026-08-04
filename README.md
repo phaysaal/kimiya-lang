@@ -11,7 +11,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.7.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.8.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.4.0`; compiled runs
 also record the compiler version, and an artifact refuses to run across
@@ -295,9 +295,11 @@ and the invoice is still one θ factor whether 6 proposals were tried or
 param name: text                 -- required: no default
 param times: num = 2             -- optional
 param live: bool = false
+param token: secret              -- computes as text, never disclosed
 
 kimiya run greet.kim name=Ada times=3        # interpreter
 python greet.py name=Ada times=3             # compiled artifact — same contract
+kimiya run push.kim token=env:MY_TOKEN       # secret, off the command line
 ```
 
 `param` declares what a program takes, typed and checked before anything
@@ -305,10 +307,26 @@ runs: a missing required param, an unknown `name=value` pair, or an
 uncoercible value refuses the run **while refusal is still free** — no
 model has been consulted. Bool accepts `true/false/1/0/yes/no/on/off`.
 The resolved values are recorded in the certificate (`params : name='Ada',
-times=3.0`), because an auditable run must say what inputs produced it —
-which also means **don't pass secrets as params**; they land in the
-certificate JSON. Defaults are literals only (string, number,
-true/false).
+times=3.0`), because an auditable run must say what inputs produced it.
+Defaults are literals only (string, number, true/false).
+
+**`secret` (since 1.8) is how a secret crosses that boundary.** A
+`param token: secret` computes exactly like text — prompts, checks, and
+`screen.type` all see the real value — but every audit surface records
+only `<redacted:5ccefdc7>`, a marker plus a short SHA-256 prefix:
+enough for an auditor to confirm two runs used the same secret, never
+the value. That covers the certificate (`params` and a committed
+value), the trace echo of `screen.type`/`paste`, and `print`, which
+prints the marker. This is formally free: audit locality already says
+no runtime value is load-bearing for a certificate's meaning, so
+redaction weakens nothing. `token=env:VAR` reads the value from the
+environment at resolve time (refusing, while refusal is still free, if
+unset) so it never touches the command line; a secret param cannot have
+a default, because a secret literal in source is disclosed to every
+reader — the checker rejects it. One honest limit: redaction is
+per-value, not taint analysis — a string *derived* from a secret
+(concatenation, slicing) is plain text, and `paste` still leaves the
+real value on the seat's clipboard after the run.
 
 **Why a declaration, not an argv read.** `param` is deliberately
 backend-neutral: the program never touches a raw argument list. The
@@ -747,7 +765,7 @@ into instant compile errors.
 ```
 program  := (decl | stmt)*
 decl     := pool NAME = STRING
-          | param NAME: (text|num|bool) [= literal]
+          | param NAME: (text|num|bool|secret) [= literal]
           | display NAME: (x11|ssh|monitor = STRING)*
           | context NAME: (domain|preserve|allow_loss = ...)+
           | schema NAME: (field: type)+
@@ -875,10 +893,13 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
   UI changes.
 - `screen.type` and `screen.paste` text is echoed into the trace
   (truncated at 200 chars) because that is what makes a run auditable —
-  so do not type or paste secrets; there is no `key_env` indirection for
-  text input yet. `paste` additionally **leaves the text on the seat's
-  clipboard after the run** — a pasted secret outlives the program and is
-  one Ctrl+V away for whoever uses that display next.
+  type or paste a secret only through a `secret` param, which the echo
+  redacts. Redaction is per-value, not taint analysis: a string
+  *derived* from a secret is plain text and is echoed like any other
+  value. `paste` additionally **leaves the text on the seat's clipboard
+  after the run** — a pasted secret outlives the program and is one
+  Ctrl+V away for whoever uses that display next, redacted trace or
+  not.
 - `screen.paste` sends Ctrl+V, which the focused application must
   interpret as paste — terminals usually want Ctrl+Shift+V, so paste into
   a terminal window will not do what you expect. Remote seats need

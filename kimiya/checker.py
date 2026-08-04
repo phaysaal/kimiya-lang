@@ -120,6 +120,13 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
         if d.type not in PARAM_TYPES:
             r.err(d.line, f"param '{d.name}': unknown type '{d.type}' "
                           f"(known: {', '.join(PARAM_TYPES)})")
+        elif d.type == "secret":
+            if not d.required:
+                r.err(d.line, f"param '{d.name}': secret params cannot "
+                              "have a default — a literal secret in source "
+                              "is disclosed to every reader. Pass it at "
+                              f"run time ({d.name}=<value> or "
+                              f"{d.name}=env:VAR)")
         elif not d.required:
             want = {"text": str, "num": float, "bool": bool}[d.type]
             if d.type == "num" and isinstance(d.default, bool):

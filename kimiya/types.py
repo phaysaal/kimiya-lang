@@ -158,7 +158,8 @@ class TypeReport:
 
 def typecheck(prog: A.Program) -> TypeReport:
     r = TypeReport()
-    param_env = {d.name: {"text": TEXT, "num": NUM, "bool": BOOL}
+    param_env = {d.name: {"text": TEXT, "num": NUM, "bool": BOOL,
+                          "secret": TEXT}
                  .get(d.type, UNKNOWN)
                  for d in prog.decls if isinstance(d, A.ParamDecl)}
     schemas: dict[str, RecordTy] = {}

@@ -252,7 +252,38 @@ class Trace:
                    if line.strip())
 
 
-PARAM_TYPES = ("text", "num", "bool")
+class Secret(str):
+    """Text that computes normally but never appears in audit output.
+
+    Certificates and traces record only `redacted()` — a marker plus a
+    short SHA-256 prefix, enough for an auditor to confirm two runs used
+    the same secret without ever seeing it. Redaction is per-value, not
+    taint analysis: a string *derived* from a secret (concatenation,
+    slicing) is plain text and is echoed like any other value.
+    """
+    __slots__ = ()
+
+    def redacted(self) -> str:
+        digest = hashlib.sha256(self.encode()).hexdigest()[:8]
+        return f"<redacted:{digest}>"
+
+    def __repr__(self) -> str:
+        return self.redacted()
+
+
+def redact_value(v):
+    """Replace every Secret in a value tree with its redacted marker —
+    the one door through which values enter certificates."""
+    if isinstance(v, Secret):
+        return v.redacted()
+    if isinstance(v, list):
+        return [redact_value(x) for x in v]
+    if isinstance(v, dict):
+        return {k: redact_value(x) for k, x in v.items()}
+    return v
+
+
+PARAM_TYPES = ("text", "num", "bool", "secret")
 
 
 def resolve_params(table: list[dict], pairs: dict) -> dict:
@@ -288,6 +319,18 @@ def resolve_params(table: list[dict], pairs: dict) -> dict:
 def _coerce_param(name: str, ptype: str, value):
     if ptype == "text":
         return value if isinstance(value, str) else str(value)
+    if ptype == "secret":
+        s = value if isinstance(value, str) else str(value)
+        if s.startswith("env:"):
+            var = s[4:]
+            got = os.environ.get(var)
+            if got is None:
+                raise ValueError(
+                    f"parameter {name!r}: environment variable {var!r} is "
+                    f"not set — secret params accept {name}=env:VAR to "
+                    "keep the value off the command line")
+            s = got
+        return Secret(s)
     if ptype == "num":
         if isinstance(value, bool):
             raise ValueError(f"parameter {name!r} expects a number")

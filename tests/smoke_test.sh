@@ -47,6 +47,7 @@ want=(
   "param_dup|duplicate param"
   "param_bad_type|unknown type"
   "commit_in_explore|commit inside explore"
+  "secret_default|secret params cannot have a default"
   "irreversible_in_explore|inside explore"
 )
 for case in "${want[@]}"; do
@@ -300,6 +301,40 @@ grep -q '"hi Ada; hi Ada; hi Ada; "' <<<"$cpout" \
   || { echo "FAIL: compiled param values"; echo "$cpout"; exit 1; }
 grep -q "params : name='Ada'" <<<"$cpout" \
   || { echo "FAIL: compiled params line"; echo "$cpout"; exit 1; }
+
+echo "== secret params: computed with, never disclosed =="
+cat > sec.kim <<'KIM'
+param token: secret
+pool A = "llama3.1:8b"
+print token
+check len(token) == 13
+act screen.type(token)
+commit(token)
+KIM
+sout=$(KIMIYA_MOCK=1 python3 -m kimiya run sec.kim token=hunter2secret)
+grep -q "COMMITTED" <<<"$sout" || { echo "FAIL: secret run"; echo "$sout"; exit 1; }
+grep -q "hunter2secret" <<<"$sout" \
+  && { echo "FAIL: secret in run output"; exit 1; }
+grep -q "redacted:" <<<"$sout" \
+  || { echo "FAIL: redaction marker missing"; echo "$sout"; exit 1; }
+grep -rq "hunter2secret" .kimiya \
+  && { echo "FAIL: secret leaked into the workspace"; exit 1; }
+# len(token)==13 passing above proves computation saw the real value
+# env indirection: off the command line; unset refuses before any model
+esout=$(MY_TOK=hunter2secret KIMIYA_MOCK=1 python3 -m kimiya run sec.kim token=env:MY_TOK)
+grep -q "COMMITTED" <<<"$esout" || { echo "FAIL: env: secret"; echo "$esout"; exit 1; }
+emiss=$(python3 -m kimiya run sec.kim token=env:KIMIYA_UNSET_VAR 2>&1 || true)
+grep -q "is not set" <<<"$emiss" \
+  || { echo "FAIL: unset env var not refused"; echo "$emiss"; exit 1; }
+# compiled artifact: identical redaction
+KIMIYA_MOCK=1 python3 -m kimiya compile sec.kim --out sec.py >/dev/null
+csout=$(KIMIYA_MOCK=1 python3 sec.py token=hunter2secret)
+grep -q "hunter2secret" <<<"$csout" \
+  && { echo "FAIL: compiled secret in output"; exit 1; }
+grep -q "redacted:" <<<"$csout" \
+  || { echo "FAIL: compiled redaction"; echo "$csout"; exit 1; }
+grep -rq "hunter2secret" .kimiya \
+  && { echo "FAIL: compiled secret leaked into workspace"; exit 1; }
 
 echo "== memo + explore: reuse counted once, exploration excluded =="
 out=$(python3 -m kimiya check "$OLDPWD_REPO/tests/bad/memo_misplaced.kim" 2>&1 || true)

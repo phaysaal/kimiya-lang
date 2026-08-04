@@ -21,7 +21,8 @@ from . import screen
 from . import vision
 from ._version import __version__ as KIMIYA_VERSION
 from .runtime import (Pool, Agent, Trace, Datasheets, MemoStore,
-                      get_oracle, run_judge, run_gen, resolve_params)
+                      get_oracle, run_judge, run_gen, resolve_params,
+                      Secret, redact_value)
 
 
 class Bolt(Exception):
@@ -554,6 +555,11 @@ class Runtime:
             raise Bolt(f"unknown function '{name}'")
         return _pyify(f(*args))
 
+    def print_value(self, v):
+        """`print` statement: a secret prints as its redacted marker —
+        stdout is often captured, and audit output never carries one."""
+        print(v.redacted() if isinstance(v, Secret) else _to_str(v))
+
     # ---- certificate ----
     def report(self, status=None, reason=""):
         if status is None:
@@ -565,7 +571,8 @@ class Runtime:
                         for n, _ in self.theta})
         egress = sorted({a.host for a in self.pool.agents if not a.is_local})
         cert = {
-            "status": status, "reason": reason, "value": self.committed,
+            "status": status, "reason": reason,
+            "value": redact_value(self.committed),
             "theta": round(theta, 4),
             "theta_factors": [(n, round(x, 4)) for n, x in self.theta],
             "uncertified_judgments": self.uncertified,
@@ -585,7 +592,7 @@ class Runtime:
                                    for n, d in self.displays.items()}}
                        if self.screen_acts or self.locates else None),
             "overclaims": list(self.overclaims),
-            "params": self.params,
+            "params": redact_value(dict(self.params)),
             "kimiya_version": KIMIYA_VERSION,
             "compiled_with": self.compiled_with,
             "memo_hits": self.memo_hits,
@@ -598,7 +605,7 @@ class Runtime:
         print(f"  status : {status}" + (f"  ({reason})" if reason else ""))
         if status == "COMMITTED":
             print("  value  : "
-                  + json.dumps(self.committed, ensure_ascii=False,
+                  + json.dumps(cert["value"], ensure_ascii=False,
                                default=str)[:200])
         print(f"  θ      : {cert['theta']}   {cert['theta_factors']}")
         if self.uncertified:
@@ -613,7 +620,8 @@ class Runtime:
         elif self.image_observations:
             print("  image egress : none (observed pixels stayed local)")
         if self.params:
-            shown = ", ".join(f"{k}={v!r}" for k, v in self.params.items())
+            shown = ", ".join(f"{k}={redact_value(v)!r}"
+                              for k, v in self.params.items())
             print(f"  params : {shown}")
         if self.memo_hits:
             print(f"  memo   : {self.memo_hits} reuse(s) — identical "

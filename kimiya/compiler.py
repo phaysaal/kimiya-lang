@@ -92,7 +92,7 @@ class Compiler:
         elif isinstance(s, A.CheckStmt):
             self.emit(f"rt.check({self.expr(s.expr)}, {s.line})")
         elif isinstance(s, A.PrintStmt):
-            self.emit(f"print(rt.call('str', [{self.expr(s.expr)}]))")
+            self.emit(f"rt.print_value({self.expr(s.expr)})")
         elif isinstance(s, A.CommitStmt):
             self.emit(f"rt.commit({self.expr(s.expr)})")
         elif isinstance(s, A.AbstainStmt):

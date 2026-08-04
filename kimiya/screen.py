@@ -376,6 +376,9 @@ def perform(action: str, args: list, disp: Display | None = None) -> dict:
 
 
 def _trace_arg(a):
+    from .runtime import Secret
+    if isinstance(a, Secret):
+        return a.redacted()
     s = str(a)
     return s if len(s) <= TRACE_TEXT_LIMIT else s[:TRACE_TEXT_LIMIT] + "…"
 

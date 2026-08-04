@@ -16,6 +16,29 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.8.0 — 2026-08-04
+- `param name: secret` — text that computes normally but never appears
+  on an audit surface. The certificate (`params` and a committed value),
+  the trace echo of `screen.type`/`paste`, and `print` all record only
+  `<redacted:sha8>` — a marker plus a SHA-256 prefix, enough for an
+  auditor to confirm two runs used the same secret without seeing it.
+  Redaction is provably harmless: audit locality already excludes
+  runtime values from a certificate's meaning, so no guarantee weakens.
+- `name=env:VAR` on a secret param reads the value from the environment
+  at resolve time — off the command line, off shell history — refusing
+  while refusal is still free if the variable is unset. Works
+  identically for the interpreter, compiled artifacts, and embedding
+  hosts (the dereference lives in the shared `resolve_params`).
+- A secret param cannot have a default: a secret literal in source is
+  disclosed to every reader, and the checker rejects it
+  (`tests/bad/secret_default.kim`).
+- Honest limit, stated in the README: redaction is per-value, not taint
+  analysis — strings derived from a secret are plain text, and `paste`
+  still leaves the real value on the seat's clipboard.
+- Compiled artifacts now route `print` through the runtime
+  (`rt.print_value`); artifacts compiled by 1.8 need a ≥1.8 runtime
+  (the existing version stamp already gates this).
+
 ## 1.7.0 — 2026-08-04
 - **Breaking (θ):** text `select` is now a priced instrument, closing the
   one place where θ took a claim instead of a measurement. Its factor
