@@ -737,10 +737,15 @@ def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
             return None
     want = ", ".join(schema_fields)
     full = f"{prompt}\n\nFIELDS: {want}\nReturn ONLY a JSON object."
+    # A wide schema cannot answer inside the default completion budget,
+    # and reasoning models spend part of it thinking before the first
+    # field. Scale the ceiling with the schema; unused headroom is free.
+    room = max(1024, 512 * len(schema_fields))
     for attempt in range(budget):
         try:
             out = oracle.complete(agent, full, system=GEN_SYSTEM,
                                   temperature=0.3 + 0.2 * attempt,
+                                  max_tokens=room,
                                   images=images)
         except (OSError, RuntimeError) as e:
             trace.append({"kind": "gen", "agent": who, "attempt": attempt,
