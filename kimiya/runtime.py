@@ -645,10 +645,22 @@ class Pool:
 
 
 JUDGE_SYSTEM = (
-    "You are a strict verifier. Read the evidence and the claim. "
-    "Answer with exactly YES or NO on the first line. YES only if the "
-    "evidence clearly supports the claim. If unsure, answer NO."
+    "You are a strict verifier. Check the claim against the evidence "
+    "point by point, briefly. Then answer on a final line with exactly "
+    "YES or NO. YES only if the evidence clearly supports the claim. "
+    "If unsure, answer NO."
 )
+
+
+def judge_verdict(text: str) -> bool:
+    """The last YES/NO the judge committed to, scanning from the end."""
+    for line in reversed(str(text).strip().splitlines()):
+        line = line.strip().upper().lstrip("*# ")
+        if line.startswith("YES"):
+            return True
+        if line.startswith("NO"):
+            return False
+    return False
 GEN_SYSTEM = (
     "You are a careful generation engine. Return ONLY a JSON object with "
     "exactly the requested fields, no prose, no markdown fences."
@@ -689,13 +701,16 @@ def run_judge(pool: Pool, oracle: Oracle, trace: Trace, sheets: Datasheets,
     for i, agent in enumerate(panel):
         p = variants[i % len(variants)]
         try:
-            # A vision judgment needs room: an image-capable backend may
-            # think before answering, and 8 tokens would truncate it.
+            # A judgment needs room to verify before it answers: a vision
+            # backend may think, and a text judge handed a checklist claim
+            # cannot walk it in eight tokens -- strict verifiers told to
+            # answer NO when unsure then answer NO because they were made
+            # unsure. The verdict is the last YES/NO the judge commits to.
             out = oracle.complete(agent, p, system=JUDGE_SYSTEM,
                                   temperature=0.1,
-                                  max_tokens=2048 if images else 8,
+                                  max_tokens=2048 if images else 256,
                                   images=images, think=bool(images))
-            vote = out.strip().upper().lstrip("*# ").startswith("YES")
+            vote = judge_verdict(out)
             err = None
         except (OSError, RuntimeError) as e:
             vote, err = False, str(e)[:80]
