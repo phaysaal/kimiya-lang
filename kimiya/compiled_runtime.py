@@ -360,6 +360,12 @@ class Runtime:
             memo_key = MemoStore.key("judge", task, claim, evidence,
                                      k, tau, ",".join(panel or []))
             ent = self.memo.get(memo_key)
+            # A stored refusal is never honoured, even one written by an
+            # older release that memoized both verdicts: replaying a NO
+            # would make one bad panel permanent, and a resume exists to
+            # ask again.
+            if ent is not None and not ent.get("verdict"):
+                ent = None
             if ent is not None:
                 self.memo_hits += 1
                 self.trace.append({"kind": "judge", "cache": "memo",
