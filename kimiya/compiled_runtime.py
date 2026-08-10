@@ -392,7 +392,12 @@ class Runtime:
         factor = (sheet["beta_lo"] if j.verdict
                   else 1 - sheet["alpha_hi"])
         self.add_theta(name, factor)
-        if memo_key is not None:
+        # Only an affirmative verdict is remembered. A judge is a
+        # stochastic instrument, and a refusal is a stop, not a fact: a
+        # program halted by an abstention gets resumed precisely so the
+        # question can be asked again, and a memoized NO would replay the
+        # one bad panel forever.
+        if memo_key is not None and j.verdict:
             self.memo.put(memo_key, {"verdict": j.verdict,
                                      "factor_name": name,
                                      "factor": factor})
