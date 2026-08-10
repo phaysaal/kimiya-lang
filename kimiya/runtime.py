@@ -147,6 +147,15 @@ PRIOR_SHEET = {"alpha_hi": 0.25, "beta_lo": 0.60,
                "n_true": 0, "n_false": 0, "calibrated": False}
 
 
+class ProviderRefusal(RuntimeError):
+    """The provider rejected the account itself, not one request.
+
+    Authentication failures and exhausted credit do not heal with
+    retries; every further attempt burns time and, once credit
+    returns, money. The run must stop and say why.
+    """
+
+
 class Datasheets:
     def __init__(self, workspace: Path):
         self.workspace = Path(workspace)
@@ -525,8 +534,17 @@ class Oracle:
         req = urllib.request.Request(
             agent.resolved_url + "/chat/completions",
             data=json.dumps(payload).encode(), headers=headers)
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            data = json.loads(resp.read())
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 402, 403):
+                raise ProviderRefusal(
+                    f"PROVIDER REFUSED ({exc.code}): {agent.host} rejected "
+                    "the account itself -- exhausted credit or failed "
+                    "authentication. Retrying cannot help until the "
+                    "account is fixed.") from None
+            raise
         choices = data.get("choices") or []
         if not choices:
             return ""
@@ -712,6 +730,8 @@ def run_judge(pool: Pool, oracle: Oracle, trace: Trace, sheets: Datasheets,
                                   images=images, think=bool(images))
             vote = judge_verdict(out)
             err = None
+        except ProviderRefusal:
+            raise
         except (OSError, RuntimeError) as e:
             vote, err = False, str(e)[:80]
         votes += int(vote)
@@ -745,6 +765,8 @@ def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
                           **({"images": [str(p) for p in images]}
                              if images else {})})
             return out.strip()
+        except ProviderRefusal:
+            raise
         except (OSError, RuntimeError) as e:
             trace.append({"kind": "gen", "agent": who,
                           "prompt_hash": h(prompt), "ok": False,
@@ -762,6 +784,8 @@ def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
                                   temperature=0.3 + 0.2 * attempt,
                                   max_tokens=room,
                                   images=images)
+        except ProviderRefusal:
+            raise
         except (OSError, RuntimeError) as e:
             trace.append({"kind": "gen", "agent": who, "attempt": attempt,
                           "prompt_hash": h(full), "ok": False,
