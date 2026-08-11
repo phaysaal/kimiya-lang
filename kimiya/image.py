@@ -120,12 +120,45 @@ def _sips_dimensions(executable: str, path: Path) -> tuple[int, int] | None:
     return None
 
 
+def _magick() -> list[str] | None:
+    """ImageMagick, under either of the names it ships as."""
+    for name in ("magick", "convert"):
+        found = shutil.which(name)
+        if found:
+            return [found] if name == "convert" else [found, "convert"]
+    return None
+
+
+def _decode_with_magick(source: Path, destination: Path) -> tuple[int, int]:
+    """Shrink a source to a transport preview, where sips does not exist.
+
+    A preview is a copy small enough to send. On a machine without
+    sips, the previous behaviour was to copy the original verbatim and
+    then reject it for being too large -- which fails a photographer
+    for owning full-resolution work.
+    """
+    command = _magick()
+    if command is None:
+        raise ImageError(
+            f"{source.suffix.upper()} needs an image decoder; neither "
+            "macOS `sips` nor ImageMagick was found")
+    result = subprocess.run(
+        [*command, str(source), "-auto-orient",
+         "-resize", f"{MAX_PREVIEW_EDGE}x{MAX_PREVIEW_EDGE}>",
+         "-quality", "88", str(destination)],
+        capture_output=True, text=True, timeout=180,
+    )
+    if result.returncode != 0 or not destination.exists():
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise ImageError(
+            f"ImageMagick could not decode {source.name}: {detail[:200]}")
+    return _jpeg_dimensions(destination)
+
+
 def _decode_with_sips(source: Path, destination: Path) -> tuple[int, int]:
     executable = shutil.which("sips")
     if not executable:
-        raise ImageError(
-            f"{source.suffix.upper()} needs an image decoder; macOS `sips` "
-            "was not found")
+        return _decode_with_magick(source, destination)
     source_dimensions = _sips_dimensions(executable, source)
     resize = (
         ["-Z", str(MAX_PREVIEW_EDGE)]
@@ -166,9 +199,9 @@ def observe(path_value, artifact_directory: Path) -> dict:
                 max(width, height) > MAX_PREVIEW_EDGE
                 or source.stat().st_size > MAX_PREVIEW_BYTES
             )
-            if needs_resize and shutil.which("sips"):
+            if needs_resize and (shutil.which("sips") or _magick()):
                 preview = artifact_directory / f"{source_sha[:20]}.jpg"
-                decoder = "sips"
+                decoder = "sips" if shutil.which("sips") else "imagemagick"
                 if not preview.exists():
                     _decode_with_sips(source, preview)
             else:
