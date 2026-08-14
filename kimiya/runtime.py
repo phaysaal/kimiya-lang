@@ -723,10 +723,16 @@ def run_judge(pool: Pool, oracle: Oracle, trace: Trace, sheets: Datasheets,
             # backend may think, and a text judge handed a checklist claim
             # cannot walk it in eight tokens -- strict verifiers told to
             # answer NO when unsure then answer NO because they were made
-            # unsure. The verdict is the last YES/NO the judge commits to.
+            # unsure. The verdict is the last YES/NO the judge commits to,
+            # and it is the LAST thing generated, so the budget must
+            # outlast the walkthrough: at 256 tokens, two panel families
+            # asked "point by point" about a 3,000-character warrant were
+            # both cut off mid-checklist on every vote of ten -- measured
+            # at 400-600 tokens to reach their final line, which the
+            # scanner then read as NO. A silenced judge is not a no vote.
             out = oracle.complete(agent, p, system=JUDGE_SYSTEM,
                                   temperature=0.1,
-                                  max_tokens=2048 if images else 256,
+                                  max_tokens=2048 if images else 1024,
                                   images=images, think=bool(images))
             vote = judge_verdict(out)
             err = None
