@@ -783,7 +783,13 @@ def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
     # A wide schema cannot answer inside the default completion budget,
     # and reasoning models spend part of it thinking before the first
     # field. Scale the ceiling with the schema; unused headroom is free.
-    room = max(1024, 512 * len(schema_fields))
+    # A floor, not a fit: a schema field is not a size. Two text fields
+    # can carry a paragraph or a JSON object of twenty entries, and at
+    # 512 tokens per field a two-field answer was cut off mid-JSON,
+    # failed to parse, and exhausted its retries -- billed each time --
+    # for want of room it was never given. max_tokens is a cap, not a
+    # cost: generous is free when the answer is short.
+    room = max(4096, 512 * len(schema_fields))
     for attempt in range(budget):
         try:
             out = oracle.complete(agent, full, system=GEN_SYSTEM,
