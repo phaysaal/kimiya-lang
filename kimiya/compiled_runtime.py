@@ -16,6 +16,7 @@ import os
 import time
 from pathlib import Path
 
+from . import dom
 from . import image as image_surface
 from . import screen
 from . import vision
@@ -148,6 +149,9 @@ class Runtime:
         self.locates = 0
         self.locates_cached = 0
         self.locates_replayed = 0
+        self.dom_acts = 0
+        self.dom_locates = 0
+        self.emit_records: list[dict] = []
         self.overclaims = []
         self.image_observations: list[dict] = []
         self.image_egress: list[dict] = []
@@ -245,6 +249,8 @@ class Runtime:
     def select(self, recall: float, query: str, store, ctx, by=None):
         if isinstance(store, dict) and store.get("kind") == "screen":
             return self.select_vision(recall, query, store, ctx, by)
+        if isinstance(store, dict) and store.get("kind") == "dom":
+            return self.select_dom(recall, query, store, ctx, by)
         words = {w for w in str(query).lower().split() if len(w) > 3}
 
         def score(x):
@@ -303,6 +309,32 @@ class Runtime:
                                "measured_beta_lo": sheet["beta_lo"]})
         return hits
 
+    def select_dom(self, recall, query, snap, ctx, by):
+        if not snap.get("exists"):
+            raise Bolt("select: no DOM snapshot to read — observe dom "
+                       "returned exists: false")
+        agent = (self.pool.agent(by) if by
+                 else self.pool.default_generator())
+        purpose = self.contexts.get(ctx, ctx or "unscoped")
+        hits = dom.locate(self.oracle, agent, self.trace, snap,
+                          _to_str(query), purpose, ctx)
+        task = dom.locate_task(ctx)
+        sheet = self.sheets.get(task)
+        self.dom_locates += 1
+        self.add_theta(task if hits else f"neg:{task}",
+                       sheet["beta_lo"] if hits
+                       else 1 - sheet["alpha_hi"])
+        if recall > sheet["beta_lo"]:
+            note = (f"declared recall {recall} exceeds the measured "
+                    f"β≥{sheet['beta_lo']:.3f} of instrument {task} — θ "
+                    "uses the measured end, not the claim")
+            if note not in self.overclaims:
+                self.overclaims.append(note)
+            self.trace.append({"kind": "overclaim", "task": task,
+                               "declared_recall": recall,
+                               "measured_beta_lo": sheet["beta_lo"]})
+        return hits
+
     def judge(self, k, tau, relation, left, right, ctx_name,
               panel, paraphrases, memo=False):
         purpose = self.contexts.get(ctx_name, ctx_name)
@@ -312,7 +344,7 @@ class Runtime:
         if relation == "shows":
             shot = left
             if not (isinstance(shot, dict)
-                    and shot.get("kind") in ("screen", "image")):
+                    and shot.get("kind") in ("screen", "image", "view")):
                 raise Bolt("shows(...) needs an observed image as its "
                            "first argument")
             if not shot.get("exists"):
@@ -324,6 +356,12 @@ class Runtime:
                     f"{shot['display']}, {shot['width']}x"
                     f"{shot['height']} at origin ({shot['x']}, "
                     f"{shot['y']}), sha {shot['sha']}"
+                )
+            elif shot.get("kind") == "view":
+                images = [shot["path"]]
+                evidence = (
+                    f"webview screenshot {shot['width']}x"
+                    f"{shot['height']}, sha {shot['sha']}"
                 )
             else:
                 try:
@@ -441,6 +479,28 @@ class Runtime:
 
     def observe(self, surface, args, actor=None):
         self.cost["observes"] += 1
+        if surface == "dom":
+            sel_arg = _to_str(args[0]) if args else None
+            try:
+                rec = dom.snapshot(sel_arg)
+            except dom.DomError as e:
+                raise Bolt(str(e)) from None
+            self.trace.append({"kind": "observe", "surface": "dom",
+                               "selector": sel_arg, "sha": rec["sha"],
+                               "exists": rec["exists"],
+                               "nodes": len(rec["nodes"]),
+                               "text_len": len(rec["text"]),
+                               "driver": rec["driver"]})
+            return rec
+        if surface == "view":
+            try:
+                rec = dom.view(self.workspace / "shots")
+            except dom.DomError as e:
+                raise Bolt(str(e)) from None
+            self.trace.append({"kind": "observe", "surface": "view",
+                               **{k: v for k, v in rec.items()
+                                  if k != "kind"}})
+            return rec
         if surface == "screen":
             try:
                 rec = screen.capture(args, self.workspace / "shots",
@@ -484,6 +544,20 @@ class Runtime:
 
     def act(self, surface, action, args, actor=None):
         self.cost["acts"] += 1
+        if surface == "dom":
+            self.dom_acts += 1
+            try:
+                rec = dom.perform(action, args)
+            except dom.DomError as e:
+                raise Bolt(str(e)) from None
+            if action == "emit":
+                self.emit_records.append({"channel": rec["channel"],
+                                          "sha": rec["value_sha"],
+                                          "len": rec["value_len"]})
+            self.trace.append({"kind": "act", "surface": "dom",
+                               "action": action, "target": dom.target(),
+                               **rec})
+            return
         if surface == "screen":
             self.screen_acts += 1
             disp = self._display_for(actor)
@@ -602,6 +676,12 @@ class Runtime:
                                        "ssh": d.is_remote}
                                    for n, d in self.displays.items()}}
                        if self.screen_acts or self.locates else None),
+            "dom": ({"driver": dom.driver_name(),
+                     "bridge": dom.bridge_host(),
+                     "acts": self.dom_acts,
+                     "locates": self.dom_locates,
+                     "emits": list(self.emit_records)}
+                    if self.dom_acts or self.dom_locates else None),
             "overclaims": list(self.overclaims),
             "params": redact_value(dict(self.params)),
             "kimiya_version": KIMIYA_VERSION,
@@ -659,6 +739,17 @@ class Runtime:
                       "from a prior run against changed pixels — layout "
                       "stability is assumed, not measured; the verdict "
                       "gates (checks, judges) still ran live")
+        if cert["dom"]:
+            dm = cert["dom"]
+            line = f"  dom    : {dm['acts']} act(s) via {dm['driver']}"
+            if dm.get("bridge"):
+                line += f" @ {dm['bridge']}"
+            if dm.get("locates"):
+                line += f", {dm['locates']} locate(s)"
+            print(line)
+            for em in dm.get("emits", []):
+                print(f"  emit   : {em['channel']} sha {em['sha']} "
+                      f"({em['len']} chars) — value not in certificate")
         for note in cert["overclaims"]:
             print(f"  ⚠ {note}")
         c = cert["cost"]
@@ -690,6 +781,13 @@ def _pyify(v):
     return str(v)
 
 
+def _dom_stable(ms=8000):
+    try:
+        return dom.stable(int(ms))
+    except dom.DomError as e:
+        raise Bolt(str(e)) from None
+
+
 _BUILTINS = {
     "len": len, "contains": lambda a, b: _to_str(b) in _to_str(a),
     "starts_with": lambda a, b: _to_str(a).startswith(_to_str(b)),
@@ -703,6 +801,7 @@ _BUILTINS = {
     "last": lambda xs: xs[-1] if xs else None,
     "keys": lambda d: list(d.keys()),
     "file_exists": lambda p: Path(_to_str(p)).exists(),
+    "dom_stable": _dom_stable,
     "map": lambda f, xs: [_pyify(f(x)) for x in xs],
     "filter": lambda f, xs: [x for x in xs if f(x)],
     "sort_by": lambda f, xs: sorted(xs, key=f),

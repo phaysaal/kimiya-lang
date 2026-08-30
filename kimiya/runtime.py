@@ -612,6 +612,11 @@ class MockOracle(Oracle):
                  temperature: float = 0.2, max_tokens: int = 1024,
                  images: list | None = None, schema: dict | None = None,
                  think: bool = False) -> str:
+        if "DOM LOCATE" in system:
+            # Deterministic: the first candidate, or a stated miss.
+            if "MOCKMISS" in prompt:
+                return json.dumps({"picks": []})
+            return json.dumps({"picks": [0]})
         if "LOCATE" in system:
             if "MOCKMISS" in prompt:
                 return "[]"
@@ -620,7 +625,9 @@ class MockOracle(Oracle):
             return json.dumps({"controls": [
                 {"box": [x0, y0, x0 + 120, y0 + 40],
                  "label": "mock control", "confidence": 0.9}]})
-        if "Answer with exactly YES or NO" in system:
+        # Matches the judge system prompt loosely: its exact wording has
+        # drifted before and silently turned every mock verdict into NO.
+        if "exactly YES or NO" in system:
             return "NO" if "MOCKNO" in prompt else "YES"
         m = re.search(r"FIELDS: ([a-z_, ]+)", prompt)
         if m:

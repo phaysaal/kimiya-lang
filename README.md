@@ -6,12 +6,13 @@ and action with language models (the KimiyaPOPL paper) — including the
 retry). Programs run against a pool of agents — **local by default**
 (Ollama at `127.0.0.1`), or remote (a vast.ai pod, OpenRouter) when
 declared, with every network egress announced and audited. Programs can
-read and write files and drive a GUI (the `screen` surface), with every
+read and write files, drive a GUI (the `screen` surface), and drive a
+host application's webview (the `dom` world), with every
 world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.8.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.9.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.4.0`; compiled runs
 also record the compiler version, and an artifact refuses to run across
@@ -121,7 +122,8 @@ runs both and checks they commit with the same result.
 Environment: `KIMIYA_OLLAMA_PORT` (default 11434), `KIMIYA_TIMEOUT`
 (seconds per model call), `KIMIYA_MOCK=1` (offline deterministic oracle,
 used by the test suite), `KIMIYA_SCREEN` (`xdotool` | `none` — see the
-screen surface below).
+screen surface below), `KIMIYA_DOM` (`bridge` | `none`, with
+`KIMIYA_DOM_BRIDGE` and `KIMIYA_DOM_TOKEN` — see the dom world below).
 
 ## A complete program
 
@@ -713,6 +715,66 @@ that way escapes the irreversibility discipline while the certificate
 goes on claiming certainty for the path. Python is the kernel extension
 mechanism for deterministic computation; effects go through `act`.
 
+### The `dom` world — driving a host application's webview (since 1.9)
+
+A host app (the SafeSelf/CounterSelf pattern: a chromeless Tauri webview
+rendering a login-walled site) can hand its page to a Kimiya program
+through an HTTP bridge. The `screen` surface cannot drive such a window
+— no address bar, no tab strip, and coordinates break the moment the
+user touches the mouse — so the `dom` world actuates the DOM directly
+while verification stays on the pixels:
+
+```
+act dom.open("https://www.linkedin.com/in/me/")
+settle until check dom_stable(20000) within 22
+
+v := observe view()                       -- pixels: the trust anchor
+if judge<3,2/3> shows(v, "the viewer's own profile ...") under k_profile panel [J1, J2]:
+    page := observe dom("main")           -- DOM: {text, nodes}
+    if check(len(page.text) > 200):
+        act dom.emit("linkedin:profile", page.text)
+        commit("harvested own profile")
+```
+
+The design commitments:
+
+- **No JavaScript ever leaves the program.** Each `dom.*` act compiles to
+  one structured op (`{"op": "click", "selector": …}`); the host builds
+  the actual JS from a fixed template with the parameters injected as
+  JSON-encoded data. Code injection is impossible by construction, and
+  the Kimiya source is the auditable contract (docs/dom_bridge.md is the
+  wire protocol).
+- **Two observation doors, one page.** `observe dom(selector?)` returns
+  `{text, nodes}` for acting and reading; `observe view()` returns a
+  screenshot of the webview for `shows` judges and `gen images=[…]`.
+  Authenticity ("this really is my profile, not an auth wall") is judged
+  on what a human would see, independent of the DOM the app manipulates.
+- **Selecting an element is a priced instrument.**
+  `select<0.9>("the dismiss control", snap) under k_ui by L` has a model
+  read the candidate nodes and pick; its factor enters θ under
+  `dom_locate:<purpose>` at the datasheet's conservative end (prior
+  β≥0.60 until measured — its own key, never the screen locate's), with
+  the same overclaim warning every instrument gets. It requires `by` and
+  `under`, and returns nodes whose `.selector` feeds `act dom.click`.
+- **Irreversibility is the program's stated claim, per op.** `dom.click`
+  is recoverable; `dom.confirm` is the click that commits (K5 demands a
+  verified gate); `effect dom.press irreversible` overrides per program.
+- **`dom.emit` is the only data-out, and it is irreversible.** A value
+  handed to the host cannot be recalled, so K5 gates it; the trace and
+  certificate record `channel + sha256 + length`, never the value — an
+  auditor can confirm *which* value left without reading it.
+- **The bridge is announced.** `KIMIYA_DOM=bridge` (with
+  `KIMIYA_DOM_BRIDGE`, `KIMIYA_DOM_TOKEN` — the token is never logged) is
+  a control-plus-egress channel, announced before the run and recorded in
+  the certificate's `dom` block. `KIMIYA_DOM=none` (the default) records
+  ops without delivering; `KIMIYA_DOM_FIXTURE` (a `{text, nodes}` JSON)
+  and `KIMIYA_DOM_VIEW_FIXTURE` (a PNG) stand in for the page offline.
+
+The surface takes no actor index — the host binds exactly one webview to
+the run. `examples/linkedin_collect_dom.kim` is the complete program;
+`tests/dom_bridge_stub.py` is a canned host the test suite runs it
+against.
+
 ## The checker IS the paper's discipline
 
 `kimiya check` rejects, before any model runs:
@@ -779,7 +841,7 @@ stmt     := NAME := rhs | check E | print E | commit(E) | abstain
           | settle[<ACTOR>] until GUARD within SECONDS
 rhs      := [memo] gen<SCHEMA>(E [, images=E]) [under CTX] [by POOL]
           | select<RECALL>(E, E) [under CTX]
-          | observe (file|image)(E)
+          | observe (file|image)(E) | observe dom([E]) | observe view()
           | retry ...            -- value = body's last assignment
           | E
 GUARD    := check E
@@ -787,13 +849,14 @@ GUARD    := check E
             [panel [P,...]] [paraphrase_prompts N]
           | judge<K,TAU> shows(E, E) under CTX [panel [P,...]]
 rhs      := ... | select<RECALL>(E, E) [under CTX] [by POOL]
-                                       -- `by` required for a screen store
+                                       -- `by` required for a screen or
+                                       -- dom store
           | observe screen[<ACTOR>]([NAME | x, y, w, h])
 ```
 
 Comments `--`; indentation is significant (spaces only). Builtins: `len
 contains starts_with lower trim lines join str num hash now range first
-last keys file_exists map filter sort_by sum`.
+last keys file_exists dom_stable map filter sort_by sum`.
 
 ## Functions, modules, and Python interop
 
@@ -863,9 +926,21 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
   paper — which is exactly why K6 forbids unframed world effects).
 - Freshness is tracked per file path and violations are trace warnings,
   not type errors (the paper's full obligation needs taint analysis).
-- Two surfaces (`file`, `screen`). Sockets, processes, and clipboard are
-  future surfaces; each will need its own effect classes and delivery
-  contracts.
+- Three surfaces (`file`, `screen`, `dom`). Sockets, processes, and
+  clipboard are future surfaces; each will need its own effect classes
+  and delivery contracts.
+- The `dom` world trusts the **host** to enforce its side: URL
+  allow-list, selector-as-data templates, one bound window. Kimiya never
+  sends code and logs every op, but a malicious host binary is outside
+  the certificate's claims — the program is the auditable contract, not
+  the app around it.
+- `dom` locates have no cache yet (every select is a live model read),
+  and `kimiya calibrate` does not label them; a `dom_locate:<purpose>`
+  sheet must come from an external campaign (`kimiya datasheet`).
+- DOM content is adversary-controlled text (the page can say anything);
+  that is why the authenticity gate judges the *pixels*, and why
+  `dom.emit` is gated. Under `KIMIYA_DOM=none` the snapshot fixture is
+  served whole — the selector argument is not applied to it.
 - Remote (`ssh`) seats need key-based auth (BatchMode — the harness
   fails fast rather than hanging on a password prompt), xdotool, and
   maim or ImageMagick on the remote host. Latency per act is one ssh

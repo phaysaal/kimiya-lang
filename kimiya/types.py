@@ -114,6 +114,25 @@ CONTROL = RecordTy(
     {"x": NUM, "y": NUM, "w": NUM, "h": NUM, "left": NUM, "top": NUM,
      "label": TEXT, "confidence": NUM}, origin="control")
 
+# One element of a DOM snapshot; what a `select` over one yields. The
+# selector is ready to hand to `act dom.click`.
+DOM_NODE = RecordTy(
+    {"selector": TEXT, "role": TEXT, "text": TEXT, "visible": BOOL},
+    origin="dom node")
+
+# `observe dom(...)`: the page as text plus candidate elements.
+DOM_SNAPSHOT = RecordTy(
+    {"kind": TEXT, "text": TEXT, "nodes": ListTy(DOM_NODE), "sha": TEXT,
+     "exists": BOOL, "driver": TEXT},
+    origin="dom snapshot")
+
+# `observe view()`: pixels of the host's webview. Like a screenshot but
+# with no capture origin — the host binds exactly one window.
+VIEW = RecordTy(
+    {"kind": TEXT, "path": TEXT, "sha": TEXT, "exists": BOOL,
+     "width": NUM, "height": NUM, "driver": TEXT},
+    origin="webview screenshot")
+
 SCHEMA_FIELD_TYPES = {
     "text": TEXT, "string": TEXT, "str": TEXT,
     "num": NUM, "number": NUM, "int": NUM, "float": NUM,
@@ -126,7 +145,7 @@ BUILTIN_RET = {
     "contains": BOOL, "starts_with": BOOL, "file_exists": BOOL,
     "lower": TEXT, "trim": TEXT, "str": TEXT, "hash": TEXT, "join": TEXT,
     "lines": ListTy(TEXT), "keys": ListTy(TEXT), "range": ListTy(NUM),
-    "sum": NUM,
+    "sum": NUM, "dom_stable": BOOL,
 }
 
 
@@ -215,6 +234,10 @@ def typecheck(prog: A.Program) -> TypeReport:
                 return SCREENSHOT
             if e.surface == "image":
                 return IMAGE
+            if e.surface == "dom":
+                return DOM_SNAPSHOT
+            if e.surface == "view":
+                return VIEW
             return OBSERVATION
         if isinstance(e, A.Call):
             return ty_call(e, env)
@@ -264,11 +287,12 @@ def typecheck(prog: A.Program) -> TypeReport:
                     r.err(rhs.line, f"gen images is {it!r}, expected "
                                     "list<image observation>")
                 elif (it.elem is not UNKNOWN
-                      and it.elem not in (IMAGE, SCREENSHOT)):
+                      and it.elem not in (IMAGE, SCREENSHOT, VIEW)):
                     r.err(rhs.line, f"gen images is {it!r}, expected "
                                     "list<image observation> from "
-                                    "`observe image(...)` or "
-                                    "`observe screen(...)`")
+                                    "`observe image(...)`, "
+                                    "`observe screen(...)` or "
+                                    "`observe view()`")
             if rhs.schema in schemas:
                 return schemas[rhs.schema]
             if rhs.schema == "Text":
@@ -278,6 +302,8 @@ def typecheck(prog: A.Program) -> TypeReport:
             st = ty(rhs.store, env)
             if st == SCREENSHOT:            # the vision instrument
                 return ListTy(CONTROL)
+            if st == DOM_SNAPSHOT:          # the dom locate instrument
+                return ListTy(DOM_NODE)
             if st in (TEXT, NUM, BOOL):
                 r.err(rhs.line, f"select store is {st!r}, expected a list "
                                 "(wrap a text with lines(...))")

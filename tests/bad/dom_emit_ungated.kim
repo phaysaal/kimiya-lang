@@ -1,0 +1,6 @@
+-- BAD: dom.emit hands a value to the host — irreversible egress — so K5
+-- demands a verified gate in front of it. Expect a checker error.
+pool A = "llama3.2:1b"
+
+s := observe dom()
+act dom.emit("chan", s.text)

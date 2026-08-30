@@ -16,6 +16,45 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.9.0 — 2026-08-30
+- The **`dom` world**: a host application's webview as an observable,
+  effectable surface, driven over an HTTP bridge (built to the
+  SafeSelf/CounterSelf spec; wire protocol in `docs/dom_bridge.md`).
+  `observe dom(selector?)` returns `{text, nodes}`; `observe view()`
+  returns webview pixels usable by `shows` judges and `gen images=[…]`;
+  acts are `dom.open/click/confirm/scroll/fill/press/emit`; the
+  readiness predicate is the `dom_stable(ms)` builtin (for
+  `settle until check …`). No JavaScript ever leaves the program — each
+  act is one structured op, and the host builds JS from fixed templates
+  with parameters as JSON data.
+- `select` over a DOM snapshot is a **priced instrument**: a model (`by`
+  and `under` required) picks among candidate nodes, and its factor
+  enters θ under `dom_locate:<purpose>` at the datasheet's conservative
+  end (prior β≥0.60; its own key — a screen-locate sheet never prices
+  it), with the standard overclaim check. No locate cache yet: every
+  dom select is a live read.
+- Effect classes mirror the screen surface: `dom.click` recoverable,
+  `dom.confirm` irreversible (the click that commits, K5-gated).
+  `dom.emit(channel, value)` — the only data-out — is **irreversible**
+  and therefore gated; the trace and certificate record
+  `channel + sha256 + length`, never the value.
+- The bridge (`KIMIYA_DOM=bridge`, `KIMIYA_DOM_BRIDGE`,
+  `KIMIYA_DOM_TOKEN`) is announced pre-run as a control+egress channel
+  and recorded in the certificate's `dom` block (endpoint host; the
+  token is never logged). Default driver is `none`: ops recorded, never
+  delivered; `KIMIYA_DOM_FIXTURE` / `KIMIYA_DOM_VIEW_FIXTURE` stand in
+  for the page offline. `kimiya doctor` probes the bridge when
+  configured. The surface takes no actor index — one bound window per
+  run.
+- Fix: the mock oracle's judge branch matched an outdated wording of
+  the judge system prompt, so `KIMIYA_MOCK=1` panels answered NO to
+  everything after 600673c reworded it. The match is now on the stable
+  phrase (`exactly YES or NO`).
+- `examples/linkedin_collect_dom.kim` (vision-gated collect: navigate,
+  recover from an auth wall, harvest via gated emit) and
+  `tests/dom_bridge_stub.py` (a canned host the smoke test drives the
+  bridge against, end to end).
+
 ## 1.8.0 — 2026-08-04
 - `param name: secret` — text that computes normally but never appears
   on an audit surface. The certificate (`params` and a committed value),

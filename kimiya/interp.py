@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from . import ast_nodes as A
+from . import dom
 from . import image as image_surface
 from . import screen
 from . import vision
@@ -138,6 +139,9 @@ class Interp:
         self.locates = 0
         self.locates_cached = 0      # exact-sha hits: same image, free
         self.locates_replayed = 0    # replay hits: pixels changed, disclosed
+        self.dom_acts = 0
+        self.dom_locates = 0
+        self.emit_records: list[dict] = []   # channel + sha + len, no value
         self.overclaims: list[str] = []
         self.image_observations: list[dict] = []
         self.image_egress: list[dict] = []
@@ -215,6 +219,12 @@ class Interp:
                                        "ssh": d.is_remote}
                                    for n, d in self.displays.items()}}
                        if self.screen_acts or self.locates else None),
+            "dom": ({"driver": dom.driver_name(),
+                     "bridge": dom.bridge_host(),
+                     "acts": self.dom_acts,
+                     "locates": self.dom_locates,
+                     "emits": list(self.emit_records)}
+                    if self.dom_acts or self.dom_locates else None),
             "overclaims": list(self.overclaims),
             "params": redact_value(dict(self.cli_params)),
             "kimiya_version": KIMIYA_VERSION,
@@ -372,6 +382,8 @@ class Interp:
         store_val = self.eval(sel.store)
         if isinstance(store_val, dict) and store_val.get("kind") == "screen":
             return self.select_vision(sel, store_val)
+        if isinstance(store_val, dict) and store_val.get("kind") == "dom":
+            return self.select_dom(sel, store_val)
         query = self.to_str(self.eval(sel.query)).lower()
         store = self.as_list(store_val, sel.line)
         words = {w for w in query.split() if len(w) > 3}
@@ -448,6 +460,39 @@ class Interp:
                                "line": sel.line})
         return hits
 
+    def select_dom(self, sel: A.SelectExpr, snap: dict):
+        """`select` over a DOM snapshot: retrieval by a measured
+        instrument, priced under dom_locate:<purpose> exactly like the
+        vision locate — never at the recall written in the source."""
+        if not snap.get("exists"):
+            raise Bolt(
+                f"select at line {sel.line}: no DOM snapshot to read — "
+                "`observe dom(...)` returned exists: false (driver "
+                f"{snap.get('driver')!r})")
+        agent = (self.pool.agent(sel.by) if sel.by
+                 else self.pool.default_generator())
+        query = self.to_str(self.eval(sel.query))
+        hits = dom.locate(self.oracle, agent, self.trace, snap, query,
+                          self.purpose_text(sel.context), sel.context)
+        task = dom.locate_task(sel.context)
+        sheet = self.sheets.get(task)
+        self.dom_locates += 1
+        if hits:
+            self.add_theta(task, sheet["beta_lo"])
+        else:
+            self.add_theta(f"neg:{task}", 1 - sheet["alpha_hi"])
+        if sel.recall > sheet["beta_lo"]:
+            note = (f"line {sel.line}: declared recall {sel.recall} exceeds "
+                    f"the measured β≥{sheet['beta_lo']:.3f} of instrument "
+                    f"{task} — θ uses the measured end, not the claim")
+            if note not in self.overclaims:
+                self.overclaims.append(note)
+            self.trace.append({"kind": "overclaim", "task": task,
+                               "declared_recall": sel.recall,
+                               "measured_beta_lo": sheet["beta_lo"],
+                               "line": sel.line})
+        return hits
+
     # ------------------------------------------------ guards
     def eval_guard(self, g) -> bool:
         if isinstance(g, A.CheckGuard):
@@ -463,7 +508,7 @@ class Interp:
         if g.relation == "shows":
             shot = self.eval(g.left)
             if not (isinstance(shot, dict)
-                    and shot.get("kind") in ("screen", "image")):
+                    and shot.get("kind") in ("screen", "image", "view")):
                 raise KimiyaRuntimeError(
                     f"line {g.line}: shows(...) needs an observed image "
                     "as its first argument")
@@ -477,6 +522,12 @@ class Interp:
                     f"screenshot of {shot['region']} on {shot['display']}, "
                     f"{shot['width']}x{shot['height']} at origin "
                     f"({shot['x']}, {shot['y']}), sha {shot['sha']}"
+                )
+            elif shot.get("kind") == "view":
+                images = [shot["path"]]
+                left = (
+                    f"webview screenshot {shot['width']}x"
+                    f"{shot['height']}, sha {shot['sha']}"
                 )
             else:
                 try:
@@ -606,6 +657,8 @@ class Interp:
         self.cost["acts"] += 1
         if s.surface == "screen":
             return self.act_screen(s, args)
+        if s.surface == "dom":
+            return self.act_dom(s, args)
         if s.surface != "file":
             raise KimiyaRuntimeError(f"unknown surface {s.surface}")
         return self.act_file(s, args)
@@ -632,6 +685,24 @@ class Interp:
         self.trace.append({"kind": "act", "surface": "screen",
                            "action": s.action, "target": disp.target(),
                            **({"actor": s.actor} if s.actor else {}),
+                           "line": s.line, **rec})
+
+    def act_dom(self, s: A.ActStmt, args: list):
+        self.check_freshness(dom.target(), s.line)
+        try:
+            rec = dom.perform(s.action, args)
+        except dom.DomError as e:
+            raise KimiyaRuntimeError(f"line {s.line}: {e}") from None
+        self.last_act[dom.target()] = time.time()
+        self.dom_acts += 1
+        if s.action == "emit":
+            # The certificate proves which value left (sha + length)
+            # without repeating it.
+            self.emit_records.append({"channel": rec["channel"],
+                                      "sha": rec["value_sha"],
+                                      "len": rec["value_len"]})
+        self.trace.append({"kind": "act", "surface": "dom",
+                           "action": s.action, "target": dom.target(),
                            "line": s.line, **rec})
 
     def act_file(self, s: A.ActStmt, args: list):
@@ -751,6 +822,34 @@ class Interp:
         self.cost["observes"] += 1
         if e.surface == "screen":
             return self.observe_screen(e)
+        if e.surface == "dom":
+            sel_arg = (self.to_str(self.eval(e.args[0]))
+                       if e.args else None)
+            try:
+                rec = dom.snapshot(sel_arg)
+            except dom.DomError as ex:
+                raise KimiyaRuntimeError(f"line {e.line}: {ex}") from None
+            self.last_obs[dom.target()] = time.time()
+            # The trace records the reading's identity, not the page:
+            # a snapshot can be a person's whole profile.
+            self.trace.append({"kind": "observe", "surface": "dom",
+                               "line": e.line, "selector": sel_arg,
+                               "sha": rec["sha"], "exists": rec["exists"],
+                               "nodes": len(rec["nodes"]),
+                               "text_len": len(rec["text"]),
+                               "driver": rec["driver"]})
+            return rec
+        if e.surface == "view":
+            try:
+                rec = dom.view(self.workspace / "shots")
+            except dom.DomError as ex:
+                raise KimiyaRuntimeError(f"line {e.line}: {ex}") from None
+            self.last_obs[dom.target()] = time.time()
+            self.trace.append({"kind": "observe", "surface": "view",
+                               "line": e.line,
+                               **{k: v for k, v in rec.items()
+                                  if k != "kind"}})
+            return rec
         if e.surface == "image":
             if len(e.args) != 1:
                 raise KimiyaRuntimeError(
@@ -877,6 +976,15 @@ class Interp:
             self.trace.append({"kind": "observe", "path": str(args[0]),
                                "predicate": "exists", "line": e.line})
             return Path(str(args[0])).exists()
+        if f == "dom_stable":
+            try:
+                ok = dom.stable(int(args[0]) if args else 8000)
+            except dom.DomError as ex:
+                raise KimiyaRuntimeError(f"line {e.line}: {ex}") from None
+            self.trace.append({"kind": "observe", "surface": "dom",
+                               "predicate": "stable", "ok": ok,
+                               "line": e.line})
+            return ok
         raise KimiyaRuntimeError(f"line {e.line}: unknown function {f}")
 
     @staticmethod

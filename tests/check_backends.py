@@ -46,4 +46,24 @@ assert rec["delivered"] is False
 assert rec["args"][0].endswith("…") and len(rec["args"][0]) <= 201
 del os.environ["KIMIYA_SCREEN"]
 
+# --- dom: derived layers stay in sync with dom.ACTIONS ---
+from kimiya import dom  # noqa: E402
+
+for action, arity in dom.ACTIONS.items():
+    assert ("dom", action) in KNOWN_ACTIONS, action
+    assert ACTION_ARITY[("dom", action)] == arity, action
+for action in dom.IRREVERSIBLE:
+    assert ("dom", action) in DEFAULT_IRREVERSIBLE, action
+assert ("dom", "click") not in DEFAULT_IRREVERSIBLE
+# a confirm travels as a click op carrying the program's claim
+assert dom.plan("confirm", ["#send"]) == \
+    {"op": "click", "selector": "#send", "irreversible": True}
+# none-mode records without delivering, and emit keeps sha+len, not value
+os.environ["KIMIYA_DOM"] = "none"
+rec = dom.perform("emit", ["chan", "topsecretvalue"])
+assert rec["delivered"] is False
+assert rec["channel"] == "chan" and rec["value_len"] == 14
+assert "topsecretvalue" not in str(rec)
+del os.environ["KIMIYA_DOM"]
+
 print("backend wiring ok")

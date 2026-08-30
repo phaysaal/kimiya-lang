@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from . import ast_nodes as A
+from . import dom
 from . import runtime
 from . import screen
 from .runtime import get_oracle, family_of, Datasheets, Trace
@@ -98,6 +99,48 @@ def _screen_observes(prog) -> bool:
     return found[0]
 
 
+def _dom_acts(prog):
+    """Every `act dom.…` in the program, bodies and fns included."""
+    from .checker import _substmts
+    found = []
+
+    def walk(stmts):
+        for s in stmts:
+            if isinstance(s, A.ActStmt) and s.surface == "dom":
+                found.append(s)
+            for sub in _substmts(s):
+                walk(sub)
+
+    walk(prog.body)
+    for d in prog.decls:
+        if isinstance(d, A.FnDecl):
+            walk(d.body)
+    return found
+
+
+def _dom_observes(prog) -> bool:
+    """Does the program read the webview (DOM or pixels) anywhere?"""
+    from .checker import _substmts
+    found = [False]
+
+    def walk_expr(e):
+        if isinstance(e, A.ObserveExpr) and e.surface in ("dom", "view"):
+            found[0] = True
+
+    def walk(stmts):
+        for s in stmts:
+            for attr in ("rhs", "expr", "iterable", "inv"):
+                v = getattr(s, attr, None)
+                if v is not None:
+                    walk_expr(v)
+                    walk_expr(getattr(v, "store", None))
+            for sub in _substmts(s):
+                walk(sub)
+
+    walk(prog.body)
+    return found[0]
+
+
 def _has_multimodal_gen(prog) -> bool:
     """Does any reachable source body declare `gen(..., images=...)`?"""
     from .checker import _substmts
@@ -148,10 +191,41 @@ def _announce_screen(prog):
                 print(f"    actor {d.name}: {where}{extra}")
 
 
+def _announce_dom(prog):
+    """The dom bridge is a control channel into a host application's
+    webview and `dom.emit` moves data out through it; both are said
+    before anything runs, the way GUI control and egress are."""
+    acts = _dom_acts(prog)
+    if not (acts or _dom_observes(prog)):
+        return
+    risky = sum(1 for s in acts if s.action in dom.IRREVERSIBLE)
+    emits = sum(1 for s in acts if s.action == "emit")
+    drv = dom.driver_name()
+    if acts:
+        print(f"⚠ webview control: this program drives a host "
+              f"application's webview through the dom bridge — "
+              f"{len(acts)} dom act(s)"
+              + (f", {risky} irreversible" if risky else ""))
+    else:
+        print("⚠ webview access: this program reads a host application's "
+              "webview through the dom bridge (observations only, no "
+              "acts)")
+    if emits:
+        print(f"    {emits} emit(s): values leave the program for the "
+              "host only through gated dom.emit; the certificate keeps "
+              "sha + length, never the value")
+    if drv == "none":
+        print("    driver: none (ops are recorded, nothing is delivered)")
+    else:
+        print(f"    driver: {drv} → {dom.bridge_host() or 'unset'}   "
+              "(KIMIYA_DOM=none records without delivering)")
+
+
 def cmd_check(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
     _announce_screen(prog)
+    _announce_dom(prog)
     rep, tyrep = _analyze(prog, py_funcs)
     for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")
@@ -176,6 +250,7 @@ def cmd_run(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
     _announce_screen(prog)
+    _announce_dom(prog)
     rep, tyrep = _analyze(prog, py_funcs)
     for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")
@@ -280,6 +355,17 @@ def cmd_run(args):
                   "prior run against changed pixels — layout stability is "
                   "assumed, not measured; the verdict gates (checks, "
                   "judges) still ran live")
+    if cert.get("dom"):
+        dm = cert["dom"]
+        line = f"  dom    : {dm['acts']} act(s) via {dm['driver']}"
+        if dm.get("bridge"):
+            line += f" @ {dm['bridge']}"
+        if dm.get("locates"):
+            line += f", {dm['locates']} locate(s)"
+        print(line)
+        for em in dm.get("emits", []):
+            print(f"  emit   : {em['channel']} sha {em['sha']} "
+                  f"({em['len']} chars) — value not in certificate")
     for note in cert.get("overclaims", []):
         print(f"  ⚠ {note}")
     c = cert["cost"]
@@ -296,6 +382,7 @@ def cmd_compile(args):
     prog, py_funcs, py_exts = _load(args.file)
     _announce_py(py_exts)
     _announce_screen(prog)
+    _announce_dom(prog)
     rep, tyrep = _analyze(prog, py_funcs)
     for w in rep.warnings + tyrep.warnings:
         print(f"⚠ {w}")
@@ -340,6 +427,9 @@ def cmd_doctor(_args):
     if len(fams) < 2:
         print("  → judgments will be uncertified until a second family "
               "is pulled")
+    if dom.driver_name() == "bridge":
+        ok, msg = dom.doctor_probe()
+        print(f"{'✓' if ok else '✗'} {msg}")
     return 0
 
 

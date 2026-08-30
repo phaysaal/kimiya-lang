@@ -252,18 +252,20 @@ def prepare(records) -> tuple[list[str], list[dict]]:
     total = 0
     for index, record in enumerate(records):
         if not isinstance(record, dict) or \
-                record.get("kind") not in ("image", "screen"):
+                record.get("kind") not in ("image", "screen", "view"):
             raise ImageError(
                 f"gen images item {index + 1} is not from "
-                "`observe image(...)` or `observe screen(...)`")
+                "`observe image(...)`, `observe screen(...)` or "
+                "`observe view()`")
         if not record.get("exists"):
             reason = record.get("reason") or "observation failed"
             raise ImageError(f"image {record.get('path', '')}: {reason}")
-        if record["kind"] == "screen":
+        if record["kind"] in ("screen", "view"):
             # The grounded screen-read: a screenshot observation feeds gen
-            # directly. Screenshots are already sized PNGs, so the source
-            # doubles as its own preview; the record's SHA is a 12-hex
-            # prefix, so freshness compares by prefix.
+            # directly (a webview `view` is the same shape). Screenshots
+            # are already sized PNGs, so the source doubles as its own
+            # preview; the record's SHA is a 12-hex prefix, so freshness
+            # compares by prefix.
             source = Path(record["path"])
             if not source.exists() or \
                     not _sha(source).startswith(record.get("sha", "?")):

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from . import ast_nodes as A
+from . import dom
 from . import screen
 from .runtime import Agent, family_of, PARAM_TYPES
 
@@ -24,19 +25,22 @@ BUILTIN_SCHEMAS = {"Text", "Json"}
 BUILTIN_FUNCS = {
     "len", "contains", "starts_with", "lower", "trim", "lines", "join",
     "str", "num", "hash", "now", "range", "first", "last", "keys",
-    "file_exists", "map", "filter", "sort_by", "sum",
+    "file_exists", "dom_stable", "map", "filter", "sort_by", "sum",
 }
 DEFAULT_IRREVERSIBLE = {("file", "overwrite"), ("file", "delete")} | \
-    {("screen", a) for a in screen.IRREVERSIBLE}
+    {("screen", a) for a in screen.IRREVERSIBLE} | \
+    {("dom", a) for a in dom.IRREVERSIBLE}
 KNOWN_ACTIONS = {("file", "create"), ("file", "append"),
                  ("file", "overwrite"), ("file", "delete"),
                  ("file", "mkdir")} | \
-    {("screen", a) for a in screen.ACTIONS}
+    {("screen", a) for a in screen.ACTIONS} | \
+    {("dom", a) for a in dom.ACTIONS}
 # action -> arity, for the surfaces that fix one. `file` actions vary
-# (mkdir takes 1, append takes 2), so only `screen` is pinned here.
-ACTION_ARITY = {("screen", a): n for a, n in screen.ACTIONS.items()}
-KNOWN_SURFACES = {"file", "screen"}
-OBSERVE_SURFACES = {"file", "screen", "image"}
+# (mkdir takes 1, append takes 2), so `screen` and `dom` are pinned here.
+ACTION_ARITY = {("screen", a): n for a, n in screen.ACTIONS.items()} | \
+    {("dom", a): n for a, n in dom.ACTIONS.items()}
+KNOWN_SURFACES = {"file", "screen", "dom"}
+OBSERVE_SURFACES = {"file", "screen", "image", "dom", "view"}
 
 
 def _substmts(s) -> list[list]:
@@ -213,6 +217,12 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             chk_actor(e.actor, e.line, f"observe {e.surface}")
             if e.surface == "image" and len(e.args) != 1:
                 r.err(e.line, "observe image(...) takes exactly one path")
+            if e.surface == "dom" and len(e.args) > 1:
+                r.err(e.line, "observe dom(...) takes at most one "
+                              "selector")
+            if e.surface == "view" and e.args:
+                r.err(e.line, "observe view() takes no arguments — it "
+                              "captures the host's one bound webview")
             for a in e.args:
                 chk_expr(a)
 
@@ -254,6 +264,8 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
     # something that can actually see.
     screenshots: set[str] = set()
     images: set[str] = set()
+    dom_snaps: set[str] = set()
+    views: set[str] = set()
 
     def is_screenshot(e) -> bool:
         if isinstance(e, A.ObserveExpr):
@@ -265,7 +277,36 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
             return e.surface == "image"
         return isinstance(e, A.Var) and e.name in images
 
+    def is_dom(e) -> bool:
+        if isinstance(e, A.ObserveExpr):
+            return e.surface == "dom"
+        return isinstance(e, A.Var) and e.name in dom_snaps
+
+    def is_view(e) -> bool:
+        if isinstance(e, A.ObserveExpr):
+            return e.surface == "view"
+        return isinstance(e, A.Var) and e.name in views
+
     def chk_vision_select(sel: A.SelectExpr):
+        if is_dom(sel.store):
+            # A DOM select is a model reading candidate elements — an
+            # instrument, like the screen locate, though it needs no
+            # eyes: the snapshot is text.
+            if not sel.by:
+                r.err(sel.line,
+                      "select over a dom snapshot needs an instrument: "
+                      "add `by <agent>`. Picking an element is a model "
+                      "reading the page, and the certificate must name "
+                      "what read it")
+            elif sel.by not in pools:
+                r.err(sel.line, f"'by {sel.by}': not a declared pool")
+            if not sel.context:
+                r.err(sel.line,
+                      "select over a dom snapshot must cite a purpose "
+                      "(`under <context>`) — it is a judged reading, and "
+                      "its datasheet is keyed by that purpose "
+                      "(dom_locate:<context>)")
+            return
         if not is_screenshot(sel.store):
             if sel.by:
                 r.warn(sel.line,
@@ -300,11 +341,12 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
     def chk_shows(g: A.JudgeGuard):
         if g.relation != "shows":
             return
-        if not (is_screenshot(g.left) or is_image(g.left)):
+        if not (is_screenshot(g.left) or is_image(g.left)
+                or is_view(g.left)):
             r.err(g.line,
                   "shows(...) takes an observed image as its first "
-                  "argument (from `observe screen(...)` or "
-                  "`observe image(...)`)")
+                  "argument (from `observe screen(...)`, "
+                  "`observe image(...)` or `observe view()`)")
         blind = [p for p in (g.panel or list(pools))
                  if p in can_see and not can_see[p]]
         if blind:
@@ -397,6 +439,14 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                 images.add(s.name)
             else:
                 images.discard(s.name)
+            if is_dom(rhs):
+                dom_snaps.add(s.name)
+            else:
+                dom_snaps.discard(s.name)
+            if is_view(rhs):
+                views.add(s.name)
+            else:
+                views.discard(s.name)
         elif isinstance(s, (A.CheckStmt, A.PrintStmt, A.CommitStmt)):
             chk_expr(s.expr)
         elif isinstance(s, A.AbstainStmt):

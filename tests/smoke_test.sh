@@ -49,6 +49,8 @@ want=(
   "commit_in_explore|commit inside explore"
   "secret_default|secret params cannot have a default"
   "irreversible_in_explore|inside explore"
+  "dom_select_blind|select over a dom snapshot needs an instrument"
+  "dom_emit_ungated|irreversible act dom.emit is unguarded"
 )
 for case in "${want[@]}"; do
   name=${case%%|*}
@@ -530,6 +532,73 @@ KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gsel.py >/dev
 sel3=$(KIMIYA_MOCK=1 python3 gsel.py)
 grep -q "('select:k_ev', 0.95)" <<<"$sel3" \
   || { echo "FAIL: compiled select pricing"; echo "$sel3"; exit 1; }
+
+echo "== dom world: bridge-driven webview, priced locate, gated emit =="
+cp "$OLDPWD_REPO/examples/linkedin_collect_dom.kim" .
+cp "$OLDPWD_REPO/tests/fixtures/dom_snapshot.json" .
+python3 -m kimiya check linkedin_collect_dom.kim | grep -q "webview control" \
+  || { echo "FAIL: dom announce missing"; exit 1; }
+rm -rf .kimiya
+dout=$(KIMIYA_MOCK=1 KIMIYA_DOM=none KIMIYA_DOM_FIXTURE="$PWD/dom_snapshot.json" \
+       KIMIYA_DOM_VIEW_FIXTURE="$FIXTURE" \
+       python3 -m kimiya run linkedin_collect_dom.kim)
+grep -q "COMMITTED" <<<"$dout" \
+  || { echo "FAIL: dom example did not commit"; echo "$dout"; exit 1; }
+grep -q "declared recall 0.85 exceeds the measured" <<<"$dout" \
+  || { echo "FAIL: dom locate overclaim not reported"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: dom certificate"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+d = dict(c["theta_factors"])
+assert d.get("dom_locate:k_ui") == 0.6, c["theta_factors"]
+assert "dom_locate:k_ui" in c["instruments"], list(c["instruments"])
+dm = c["dom"]
+assert dm["driver"] == "none" and dm["acts"] == 7 and dm["locates"] == 1, dm
+em = dm["emits"][0]
+assert em["channel"] == "linkedin:profile" and em["len"] > 200 \
+    and len(em["sha"]) == 12, em
+# nothing was delivered, and no act record claims otherwise
+recs = [json.loads(ln) for ln in open(".kimiya/trace.jsonl") if ln.strip()]
+assert all(not r.get("delivered")
+           for r in recs if r.get("kind") == "act"), "delivered under none"
+PY
+# the harvested value must never land on an audit surface
+grep -rq "DOMSENTINEL9" .kimiya \
+  && { echo "FAIL: emitted value leaked into the workspace"; exit 1; }
+# compiled artifact: identical pricing and the same redaction
+KIMIYA_MOCK=1 python3 -m kimiya compile linkedin_collect_dom.kim \
+  --out dart.py >/dev/null
+rm -rf .kimiya
+dout2=$(KIMIYA_MOCK=1 KIMIYA_DOM=none KIMIYA_DOM_FIXTURE="$PWD/dom_snapshot.json" \
+        KIMIYA_DOM_VIEW_FIXTURE="$FIXTURE" python3 dart.py)
+grep -q "COMMITTED" <<<"$dout2" \
+  || { echo "FAIL: compiled dom example"; echo "$dout2"; exit 1; }
+grep -q "('dom_locate:k_ui', 0.6)" <<<"$dout2" \
+  || { echo "FAIL: compiled dom pricing"; echo "$dout2"; exit 1; }
+grep -rq "DOMSENTINEL9" .kimiya \
+  && { echo "FAIL: compiled run leaked the emitted value"; exit 1; }
+# the bridge driver, end to end against a canned host
+domport=8123
+python3 "$OLDPWD_REPO/tests/dom_bridge_stub.py" $domport \
+  dom_snapshot.json "$FIXTURE" ops.jsonl &
+domstub=$!
+sleep 0.4
+rm -rf .kimiya
+dout3=$(KIMIYA_MOCK=1 KIMIYA_DOM=bridge \
+        KIMIYA_DOM_BRIDGE="http://127.0.0.1:$domport/op" \
+        KIMIYA_DOM_TOKEN=testtoken \
+        python3 -m kimiya run linkedin_collect_dom.kim)
+kill $domstub 2>/dev/null || true
+grep -q "COMMITTED" <<<"$dout3" \
+  || { echo "FAIL: bridge-driven run"; echo "$dout3"; exit 1; }
+grep -q '"op": "open"' ops.jsonl \
+  || { echo "FAIL: open op not delivered to the host"; exit 1; }
+grep -q '"op": "emit"' ops.jsonl \
+  || { echo "FAIL: emit op not delivered to the host"; exit 1; }
+grep -q "DOMSENTINEL9" ops.jsonl \
+  || { echo "FAIL: emitted value did not reach the host"; exit 1; }
+grep -rq "DOMSENTINEL9" .kimiya \
+  && { echo "FAIL: bridge run leaked the emitted value"; exit 1; }
 
 echo "== artifact versioning: stamp + compatibility gate =="
 KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gv.py >/dev/null

@@ -1,0 +1,12 @@
+-- BAD: a select over a DOM snapshot is a model reading the page — it
+-- must name its instrument (`by <agent>`). Expect a checker error.
+pool A = "llama3.2:1b"
+
+context k:
+    domain     = "which element is the control"
+    preserve   = [role]
+    allow_loss = [styling]
+
+s := observe dom()
+p := select<0.9>("the submit control", s) under k
+commit(first(p))

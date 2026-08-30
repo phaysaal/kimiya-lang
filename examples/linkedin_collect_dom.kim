@@ -1,0 +1,88 @@
+-- COLLECT the signed-in member's OWN LinkedIn profile via the dom world.
+--
+-- The page renders inside a host application's webview (the SafeSelf /
+-- CounterSelf pattern); the host exposes it through the dom bridge.
+-- Actuation is by structured DOM ops (no address bar, no coordinates,
+-- no clipboard); authenticity is verified on the PIXELS by a vision
+-- panel — the judge sees what a human would see, independent of the DOM
+-- the app manipulates. The harvested text leaves the program only
+-- through gated dom.emit, and the certificate records its sha + length,
+-- never the value.
+--
+-- Offline: KIMIYA_MOCK=1 KIMIYA_DOM=none \
+--            KIMIYA_DOM_FIXTURE=tests/fixtures/dom_snapshot.json \
+--            KIMIYA_DOM_VIEW_FIXTURE=tests/fixtures/screen.png \
+--            python3 -m kimiya run examples/linkedin_collect_dom.kim
+-- Live:    the host sets KIMIYA_DOM=bridge, KIMIYA_DOM_BRIDGE and
+--          KIMIYA_DOM_TOKEN, and runs the compiled artifact.
+
+param name: text = ""      -- optional identity; when set, the gate name-matches
+
+agent L:
+    backend = "claude_cli"
+    model = "claude-opus-4-8"
+
+agent J1:
+    backend = "anthropic"
+    model = "claude-opus-4-8"
+
+agent J2:
+    backend = "openrouter"
+    model = "google/gemini-2.5-flash"
+    key_env = "OPENROUTER_API_KEY"
+    vision = true
+
+context k_ui:
+    domain     = "which DOM element is the named control"
+    preserve   = [role, accessible_name, affordance]
+    allow_loss = [styling, position, unrelated_elements]
+
+context k_state:
+    domain     = "what state the page is in"
+    preserve   = [auth_state, page_identity]
+    allow_loss = [ads, sidebar, theme]
+
+context k_profile:
+    domain     = "whether the page is the viewer's own LinkedIn profile"
+    preserve   = [own_name, headline, edit_affordance]
+    allow_loss = [ads, sidebar, theme]
+
+-- 1 · Navigate. The host owns the webview, so open is reliable.
+act dom.open("https://www.linkedin.com/in/me/")
+settle until check dom_stable(20000) within 22
+
+-- 2 · Auth-wall / checkpoint detection on the PIXELS; recover by
+--     operating the real UI, then navigate again.
+v1 := observe view()
+if judge<3,2/3> shows(v1, "a LinkedIn sign-in or join wall OR a security checkpoint, NOT a profile page") under k_state panel [J1, J2]:
+    snap0 := observe dom()
+    picks0 := select<0.85>("a dismiss or not-now or skip control to leave the interstitial", snap0) under k_ui by L
+    if check(len(picks0) > 0):
+        act dom.click(first(picks0))
+    act dom.open("https://www.linkedin.com/in/me/")
+    settle until check dom_stable(10000) within 12
+
+-- 3 · Load the lazy lower sections (recoverable scrolls), return to top.
+act dom.scroll(0, 4000)
+act dom.scroll(0, 4000)
+act dom.scroll(0, -8000)
+settle until check dom_stable(4000) within 6
+
+-- 4 · The authenticity gate, on the pixels — then read the DOM, then
+--     emit. The emit sits first in a checked branch: the verified gate
+--     K5 demands for an irreversible act.
+vN := observe view()
+gate := "the viewer's own LinkedIn profile while signed in: name and headline visible with a self-only control (an Edit pencil, Add section, or Analytics private to you), NOT an auth wall, a checkpoint, or someone else's profile (Connect / Message / Follow)"
+if check(len(name) > 0):
+    gate := "the viewer's own LinkedIn profile belonging to '" + name + "': that exact name shown with a self-only control (an Edit pencil, Add section, or Analytics private to you), NOT an auth wall, a checkpoint, or a different person's profile"
+if judge<3,2/3> shows(vN, gate) under k_profile panel [J1, J2]:
+    page := observe dom("main")
+    if check(len(page.text) > 200):
+        act dom.emit("linkedin:profile", page.text)
+        commit("linkedin: harvested own profile via governed dom world")
+    else:
+        print "⚡ profile confirmed but text too short — abstaining"
+        abstain
+else:
+    print "⚡ not a verified own-profile page — abstaining"
+    abstain
