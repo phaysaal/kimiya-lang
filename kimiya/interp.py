@@ -143,6 +143,7 @@ class Interp:
         self.dom_locates = 0
         self.emit_records: list[dict] = []   # channel + sha + len, no value
         self.overclaims: list[str] = []
+        self.prompt_templates: dict[str, str] = {}   # sha -> skeleton
         self.image_observations: list[dict] = []
         self.image_egress: list[dict] = []
         self.committed = None
@@ -226,6 +227,7 @@ class Interp:
                      "emits": list(self.emit_records)}
                     if self.dom_acts or self.dom_locates else None),
             "overclaims": list(self.overclaims),
+            "prompt_templates": dict(self.prompt_templates),
             "params": redact_value(dict(self.cli_params)),
             "kimiya_version": KIMIYA_VERSION,
             "memo_hits": self.memo_hits,
@@ -338,6 +340,18 @@ class Interp:
         # free: the model proposes, and only the gates warrant.
         read_task = (f"read:{g.context or 'unscoped'}"
                      if image_paths else None)
+        # A prompt written as a literal — interpolated or plain — has a
+        # statically-known skeleton: hash it and cite it, so the
+        # certificate names the prompt template this instrument ran
+        # under. A prompt assembled at run time has no skeleton, and
+        # its gen records none.
+        tpl = None
+        if isinstance(g.prompt, A.InterpString):
+            tpl = g.prompt.template
+        elif isinstance(g.prompt, A.Lit) and isinstance(g.prompt.value, str):
+            tpl = g.prompt.value
+        if tpl is not None:
+            self.record_template(tpl, g.line)
         if g.memo:
             image_key = ",".join(item["preview_sha"] for item in image_meta)
             key = MemoStore.key("gen", g.schema, prompt, agent.label(),
@@ -377,6 +391,19 @@ class Interp:
             if read_task and self.explore_depth == 0:
                 self.memo_counted.add(key)
         return out
+
+    def record_template(self, tpl: str, line: int) -> str:
+        """Instrument identity includes the prompt template: a datasheet
+        measured under one template says nothing about another. The
+        certificate carries the skeleton and its hash so an audit can
+        check exactly which template a reading was made under."""
+        sha = hashlib.sha256(tpl.encode()).hexdigest()[:12]
+        if sha not in self.prompt_templates:
+            self.prompt_templates[sha] = (tpl if len(tpl) <= 400
+                                          else tpl[:400] + "…")
+            self.trace.append({"kind": "template", "surface": "gen",
+                               "sha": sha, "line": line})
+        return sha
 
     def eval_select(self, sel: A.SelectExpr):
         store_val = self.eval(sel.store)
@@ -784,6 +811,12 @@ class Interp:
     def eval(self, e):
         if isinstance(e, A.Lit):
             return e.value
+        if isinstance(e, A.InterpString):
+            out = [e.parts[0]]
+            for i, ex in enumerate(e.exprs):
+                out.append(self.to_str(self.eval(ex)))
+                out.append(e.parts[i + 1])
+            return "".join(out)
         if isinstance(e, A.Var):
             if e.name in self.env:
                 return self.env[e.name]

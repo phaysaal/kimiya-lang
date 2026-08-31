@@ -12,7 +12,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.9.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.10.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.4.0`; compiled runs
 also record the compiler version, and an artifact refuses to run across
@@ -178,6 +178,32 @@ claim exceeds the measurement. Install a measured sheet
 measured recall (here: to 0.57 at β≥0.95). When relevance is
 mechanically decidable, use the kernel path instead — `filter` /
 `contains` are recall-1 retrieval at certainty 1, factor-free.
+
+## Strings that compute — and prompts with named templates (since 1.10)
+
+A string literal in expression position may carry holes:
+
+```
+facts := "n={len(xs)}  mean={mean(xs)}  p95={p95(xs)}"
+r := gen<Reading>("State only what these statistics show: {facts}") by A
+```
+
+Each hole is a full expression, spliced in with the same text conversion
+`+` uses; `{{` and `}}` write literal braces. Declaration-position
+strings (pool models, `use` paths, param defaults, context fields) are
+never interpolated — configuration is not a computation.
+
+The payoff is more than convenience. A gen prompt written as a literal —
+interpolated or plain — has a **statically-known skeleton**: the literal
+with its holes left open (`"State only what these statistics show: {}"`).
+Every run hashes that skeleton and records it in the certificate
+(`prompt_templates: {sha12: skeleton}`), because instrument identity
+includes the prompt template — a datasheet measured under one template
+says nothing about another, and an audit can now check exactly which
+template each reading ran under. A prompt assembled at run time
+(`"…" + facts`) has no skeleton and records none; the absence is itself
+the audit signal. Compiled artifacts carry the skeleton from compile
+time and cite the identical hash.
 
 ## Images: `observe image` and multimodal `gen`
 
@@ -854,7 +880,9 @@ rhs      := ... | select<RECALL>(E, E) [under CTX] [by POOL]
           | observe screen[<ACTOR>]([NAME | x, y, w, h])
 ```
 
-Comments `--`; indentation is significant (spaces only). Builtins: `len
+Comments `--`; indentation is significant (spaces only). String literals
+in expression position may carry interpolation holes (`"n={len(xs)}"`,
+since 1.10; `{{`/`}}` for literal braces). Builtins: `len
 contains starts_with lower trim lines join str num hash now range first
 last keys file_exists dom_stable map filter sort_by sum`.
 
@@ -922,6 +950,11 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
   campaign; `calibrate` does not yet label per-item relevance.
 - θ accounting is the simple per-step conservative product; abstention
   probability is not separately bounded.
+- Prompt templates are cited only for literal prompts (interpolated or
+  plain) — a `+`-assembled prompt records none, deliberately: the
+  absence is the audit signal. Judge prompts are composed by the runtime
+  from fixed wording, so their template identity is the language version
+  itself, which every certificate already records.
 - Retry snapshot semantics restores *program* state only (correct per the
   paper — which is exactly why K6 forbids unframed world effects).
 - Freshness is tracked per file path and violations are trace warnings,

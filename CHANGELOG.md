@@ -16,6 +16,33 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.10.0 — 2026-08-30
+- **String interpolation**: a string literal in expression position may
+  carry expression holes — `"n={len(xs)} mean={mean(xs)}"` — spliced at
+  evaluation with the same text conversion `+` uses. `{{` and `}}` are
+  literal braces; holes are full expressions (calls, fields, operators)
+  and diagnose at the enclosing line. Strings in declaration position
+  (pool models, `use` paths, param defaults, context fields) are never
+  interpolated — configuration is not a computation.
+- **Breaking (source):** a single `{` or `}` inside a string literal now
+  opens/closes a hole; write `{{` / `}}` for the characters themselves.
+  No shipped example or test used bare braces; sources that did will
+  fail loudly at parse time, never silently change meaning.
+- **Prompt templates in the certificate.** A gen prompt written as a
+  literal — interpolated or plain — has a statically-known skeleton
+  (the literal with `{}` holes left open). Each run hashes it and
+  records `prompt_templates: {sha12: skeleton}` in the certificate
+  (and a `template` trace record), because instrument identity includes
+  the prompt template: a datasheet measured under one template says
+  nothing about another, and the certificate now names which template
+  every reading ran under. A prompt assembled at run time (`+`,
+  variables) has no skeleton and records none — the visible difference
+  is itself the audit signal. Compiled artifacts carry the skeleton at
+  compile time and cite the identical hash.
+- `examples/data_pipeline.kim` rewritten to interpolation: the
+  `"n=" + str(len(xs)) + …` chain becomes one literal, and its gen
+  prompt now certifies under a named template.
+
 ## 1.9.0 — 2026-08-30
 - The **`dom` world**: a host application's webview as an observable,
   effectable surface, driven over an HTTP bridge (built to the

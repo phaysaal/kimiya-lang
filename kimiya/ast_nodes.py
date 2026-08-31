@@ -14,6 +14,27 @@ class Lit:
 
 
 @dataclass
+class InterpString:
+    """A string literal with expression holes: "n={len(xs)}".
+
+    parts has exactly one more element than exprs; evaluation splices
+    each expression's text between its neighbouring parts. The literal
+    with its holes left open — `template` — is the value's static
+    skeleton, known before anything runs: when such a literal is a gen
+    prompt, the skeleton is hashed and recorded as the instrument's
+    template identity (a datasheet measured under one prompt template
+    says nothing about another). A `+`-built prompt has no skeleton,
+    which is precisely what this node exists to fix."""
+    parts: list           # [str, ...] — the fixed text between holes
+    exprs: list           # the hole expressions, in order
+    line: int = 0
+
+    @property
+    def template(self) -> str:
+        return "{}".join(self.parts)
+
+
+@dataclass
 class Var:
     name: str
     line: int = 0

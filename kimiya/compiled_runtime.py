@@ -153,6 +153,7 @@ class Runtime:
         self.dom_locates = 0
         self.emit_records: list[dict] = []
         self.overclaims = []
+        self.prompt_templates: dict[str, str] = {}   # sha -> skeleton
         self.image_observations: list[dict] = []
         self.image_egress: list[dict] = []
         self.last_gen: Agent | None = None
@@ -179,11 +180,25 @@ class Runtime:
         self.py_funcs = py_funcs
 
     # ---- primitive operations (mirror the interpreter) ----
+    def record_template(self, tpl: str):
+        """Instrument identity includes the prompt template — the
+        compiler passes the statically-known skeleton of a literal
+        prompt; a run-time-assembled prompt passes none."""
+        sha = hashlib.sha256(tpl.encode()).hexdigest()[:12]
+        if sha not in self.prompt_templates:
+            self.prompt_templates[sha] = (tpl if len(tpl) <= 400
+                                          else tpl[:400] + "…")
+            self.trace.append({"kind": "template", "surface": "gen",
+                               "sha": sha})
+        return sha
+
     def gen(self, schema: str, prompt: str, by: str | None, images=None,
-            memo=False, context=None):
+            memo=False, context=None, template=None):
         agent = self.pool.agent(by) if by else self.pool.default_generator()
         self.last_gen = agent
         prompt = _to_str(prompt)
+        if template is not None:
+            self.record_template(template)
         image_paths = None
         image_meta = []
         if images is not None:
@@ -683,6 +698,7 @@ class Runtime:
                      "emits": list(self.emit_records)}
                     if self.dom_acts or self.dom_locates else None),
             "overclaims": list(self.overclaims),
+            "prompt_templates": dict(self.prompt_templates),
             "params": redact_value(dict(self.params)),
             "kimiya_version": KIMIYA_VERSION,
             "compiled_with": self.compiled_with,
@@ -739,6 +755,11 @@ class Runtime:
                       "from a prior run against changed pixels — layout "
                       "stability is assumed, not measured; the verdict "
                       "gates (checks, judges) still ran live")
+        for sha, tpl in cert["prompt_templates"].items():
+            short = tpl.replace("\n", "⏎")
+            if len(short) > 60:
+                short = short[:60] + "…"
+            print(f'  template {sha} : "{short}"')
         if cert["dom"]:
             dm = cert["dom"]
             line = f"  dom    : {dm['acts']} act(s) via {dm['driver']}"
@@ -771,6 +792,16 @@ def _to_str(v) -> str:
     if isinstance(v, (dict, list)):
         return json.dumps(v, ensure_ascii=False, default=str)
     return str(v)
+
+
+def _tpl(parts, vals) -> str:
+    """An interpolated string literal: splice each value's text between
+    the template's fixed parts (len(parts) == len(vals) + 1)."""
+    out = [parts[0]]
+    for i, v in enumerate(vals):
+        out.append(_to_str(v))
+        out.append(parts[i + 1])
+    return "".join(out)
 
 
 def _pyify(v):

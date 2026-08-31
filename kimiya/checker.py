@@ -200,6 +200,9 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
         elif isinstance(e, A.Index):
             chk_expr(e.obj)
             chk_expr(e.index)
+        elif isinstance(e, A.InterpString):
+            for x in e.exprs:
+                chk_expr(x)
         elif isinstance(e, A.ListExpr):
             for x in e.items:
                 chk_expr(x)

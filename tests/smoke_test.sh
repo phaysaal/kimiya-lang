@@ -51,6 +51,8 @@ want=(
   "irreversible_in_explore|inside explore"
   "dom_select_blind|select over a dom snapshot needs an instrument"
   "dom_emit_ungated|irreversible act dom.emit is unguarded"
+  "interp_empty|empty interpolation hole"
+  "interp_unclosed|unterminated interpolation hole"
 )
 for case in "${want[@]}"; do
   name=${case%%|*}
@@ -532,6 +534,54 @@ KIMIYA_MOCK=1 python3 -m kimiya compile grounded_summary.kim --out gsel.py >/dev
 sel3=$(KIMIYA_MOCK=1 python3 gsel.py)
 grep -q "('select:k_ev', 0.95)" <<<"$sel3" \
   || { echo "FAIL: compiled select pricing"; echo "$sel3"; exit 1; }
+
+echo "== string interpolation: spliced values, hashable prompt templates =="
+cat > interp.kim <<'KIM'
+pool A = "llama3.1:8b"
+xs := [4, 5, 6]
+who := "Ada"
+line := "n={len(xs)} first={first(xs)} who={who} lit={{esc}}"
+print line
+r := gen<Text>("State only what these stats show: {line}") by A
+check len(r) > 0
+commit(line)
+KIM
+rm -rf .kimiya
+iout=$(KIMIYA_MOCK=1 python3 -m kimiya run interp.kim)
+grep -q "n=3 first=4 who=Ada lit={esc}" <<<"$iout" \
+  || { echo "FAIL: interpolation splice"; echo "$iout"; exit 1; }
+grep -q 'template .* : "State only what these stats show: {}"' <<<"$iout" \
+  || { echo "FAIL: prompt template not cited"; echo "$iout"; exit 1; }
+python3 - <<'PY' || { echo "FAIL: prompt_templates in certificate"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+tpls = c["prompt_templates"]
+assert list(tpls.values()) == ["State only what these stats show: {}"], tpls
+assert all(len(sha) == 12 for sha in tpls), tpls
+PY
+# a prompt assembled at run time has no skeleton: nothing is recorded
+cat > interp2.kim <<'KIM'
+pool A = "llama3.1:8b"
+p := "dynamic " + str(now())
+r := gen<Text>(p) by A
+check len(r) > 0
+commit(r)
+KIM
+rm -rf .kimiya
+KIMIYA_MOCK=1 python3 -m kimiya run interp2.kim >/dev/null
+python3 - <<'PY' || { echo "FAIL: dynamic prompt gained a template"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+assert c["prompt_templates"] == {}, c["prompt_templates"]
+PY
+# compiled artifact: identical splice, identical template hash
+KIMIYA_MOCK=1 python3 -m kimiya compile interp.kim --out interp_c.py >/dev/null
+rm -rf .kimiya
+ic=$(KIMIYA_MOCK=1 python3 interp_c.py)
+grep -q "n=3 first=4 who=Ada lit={esc}" <<<"$ic" \
+  || { echo "FAIL: compiled interpolation"; echo "$ic"; exit 1; }
+grep -q 'template .* : "State only what these stats show: {}"' <<<"$ic" \
+  || { echo "FAIL: compiled template"; echo "$ic"; exit 1; }
 
 echo "== dom world: bridge-driven webview, priced locate, gated emit =="
 cp "$OLDPWD_REPO/examples/linkedin_collect_dom.kim" .

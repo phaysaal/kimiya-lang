@@ -312,6 +312,11 @@ def cmd_run(args):
             tag = f"measured: {s['source']}"
         print(f"  instrument {task}: α≤{s['alpha_hi']:.2f} "
               f"β≥{s['beta_lo']:.2f} [{tag}]")
+    for sha, tpl in cert.get("prompt_templates", {}).items():
+        short = tpl.replace("\n", "⏎")
+        if len(short) > 60:
+            short = short[:60] + "…"
+        print(f'  template {sha} : "{short}"')
     if cert["egress"]:
         print(f"  egress : {', '.join(cert['egress'])} "
               "(prompts left the machine)")

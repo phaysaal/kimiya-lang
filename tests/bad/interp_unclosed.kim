@@ -1,0 +1,6 @@
+-- BAD: a hole opened with { must close with } inside the string.
+-- Expect a parse error.
+pool A = "llama3.2:1b"
+
+print "value={len(xs)"
+commit(1)

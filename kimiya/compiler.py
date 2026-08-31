@@ -32,6 +32,9 @@ class Compiler:
     def expr(self, e) -> str:
         if isinstance(e, A.Lit):
             return repr(e.value)
+        if isinstance(e, A.InterpString):
+            vals = ", ".join(self.expr(x) for x in e.exprs)
+            return f"_tpl({e.parts!r}, [{vals}])"
         if isinstance(e, A.Var):
             return f"_v(env, {e.name!r})"
         if isinstance(e, A.ListExpr):
@@ -143,9 +146,17 @@ class Compiler:
             by = repr(rhs.by) if rhs.by else "None"
             images = (self.expr(rhs.images)
                       if rhs.images is not None else "None")
+            # A literal prompt's skeleton is known at compile time — the
+            # artifact carries it so the run can cite its template.
+            tpl = None
+            if isinstance(rhs.prompt, A.InterpString):
+                tpl = rhs.prompt.template
+            elif isinstance(rhs.prompt, A.Lit) and \
+                    isinstance(rhs.prompt.value, str):
+                tpl = rhs.prompt.value
             return (f"rt.gen({rhs.schema!r}, {self.expr(rhs.prompt)}, {by}, "
                     f"images={images}, memo={rhs.memo}, "
-                    f"context={rhs.context!r})")
+                    f"context={rhs.context!r}, template={tpl!r})")
         if isinstance(rhs, A.SelectExpr):
             ctx = repr(rhs.context) if rhs.context else "None"
             by = repr(rhs.by) if rhs.by else "None"
@@ -238,7 +249,7 @@ class Compiler:
         self.emit("import sys")
         self.emit("import importlib, importlib.util")
         self.emit("from kimiya.compiled_runtime import Runtime, Bolt, "
-                  "_to_str, _pyify, parse_cli")
+                  "_to_str, _pyify, _tpl, parse_cli")
         self.emit()
         # repr, not json.dumps: agent fields may be booleans (vision), and
         # JSON's `true` is not Python.

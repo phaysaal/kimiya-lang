@@ -1,0 +1,6 @@
+-- BAD: an interpolation hole must contain an expression; {} is nothing
+-- to splice. Literal braces are written {{ and }}. Expect a parse error.
+pool A = "llama3.2:1b"
+
+print "value={}"
+commit(1)

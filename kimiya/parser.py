@@ -32,6 +32,8 @@ World extension:
 
 from __future__ import annotations
 
+import dataclasses
+
 from .lexer import lex, Token
 from . import ast_nodes as A
 
@@ -618,7 +620,7 @@ class Parser:
         t = self.peek()
         if self.at("STRING"):
             self.next()
-            return A.Lit(t.value, t.line)
+            return self.string_lit(t.value, t.line)
         if self.at("NUMBER"):
             self.next()
             v = float(t.value)
@@ -673,6 +675,109 @@ class Parser:
             return A.Var(t.value, t.line)
         raise ParseError(
             f"line {t.line}: unexpected {t.value or t.kind!r} in expression")
+
+    # ------------- string interpolation -------------
+    # A string literal in expression position may carry holes:
+    #     "n={len(xs)} mean={mean(xs)}"
+    # Each hole is a full expression; {{ and }} are literal braces.
+    # Strings in declaration position (pool models, use paths, param
+    # defaults, context fields) consume the token directly and are never
+    # interpolated — configuration is not a computation.
+
+    def string_lit(self, raw: str, line: int):
+        parts: list[str] = []
+        exprs: list = []
+        buf: list[str] = []
+        i = 0
+        while i < len(raw):
+            c = raw[i]
+            if c == "{":
+                if raw[i + 1:i + 2] == "{":
+                    buf.append("{")
+                    i += 2
+                    continue
+                end = self._hole_end(raw, i + 1, line)
+                src = raw[i + 1:end].strip()
+                if not src:
+                    raise ParseError(
+                        f"line {line}: empty interpolation hole in string "
+                        "— write {{ and }} for literal braces")
+                exprs.append(self._hole_expr(src, line))
+                parts.append("".join(buf))
+                buf = []
+                i = end + 1
+                continue
+            if c == "}":
+                if raw[i + 1:i + 2] == "}":
+                    buf.append("}")
+                    i += 2
+                    continue
+                raise ParseError(
+                    "line %d: lone '}' in string — write }} for a "
+                    "literal brace ({expr} opens a hole)" % line)
+            buf.append(c)
+            i += 1
+        if not exprs:
+            return A.Lit("".join(buf), line)
+        parts.append("".join(buf))
+        return A.InterpString(parts, exprs, line)
+
+    @staticmethod
+    def _hole_end(raw: str, k: int, line: int) -> int:
+        """Index of the '}' closing the hole opened just before k,
+        skipping braces inside nested string literals."""
+        depth, i, in_str = 1, k, False
+        while i < len(raw):
+            c = raw[i]
+            if in_str:
+                if c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+            i += 1
+        raise ParseError(
+            f"line {line}: unterminated interpolation hole in string "
+            "(missing '}')")
+
+    def _hole_expr(self, src: str, line: int):
+        try:
+            sub = Parser(src)
+            e = sub.expr()
+            if not (sub.at("NEWLINE") or sub.at("EOF")):
+                extra = sub.peek()
+                raise ParseError(
+                    f"unexpected {extra.value or extra.kind!r} after the "
+                    "expression")
+        except SyntaxError as ex:
+            msg = str(ex)
+            if msg.startswith("line 1: "):
+                msg = msg[len("line 1: "):]
+            raise ParseError(
+                f"line {line}: bad interpolation hole "
+                f"{{{src}}}: {msg}") from None
+        self._reline(e, line)
+        return e
+
+    @staticmethod
+    def _reline(node, line: int):
+        """Hole expressions are parsed from a one-line fragment; stamp
+        them with the enclosing string's real line for diagnostics."""
+        if isinstance(node, (list, tuple)):
+            for x in node:
+                Parser._reline(x, line)
+            return
+        if not dataclasses.is_dataclass(node):
+            return
+        if hasattr(node, "line"):
+            setattr(node, "line", line)
+        for f in dataclasses.fields(node):
+            Parser._reline(getattr(node, f.name), line)
 
 
 def parse(source: str) -> A.Program:

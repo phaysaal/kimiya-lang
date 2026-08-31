@@ -201,6 +201,10 @@ def typecheck(prog: A.Program) -> TypeReport:
             return UNKNOWN
         if isinstance(e, A.Var):
             return env.get(e.name, UNKNOWN)
+        if isinstance(e, A.InterpString):
+            for x in e.exprs:
+                ty(x, env)
+            return TEXT
         if isinstance(e, A.ListExpr):
             if not e.items:
                 return ListTy(UNKNOWN)
