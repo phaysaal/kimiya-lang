@@ -27,6 +27,7 @@ Usage: python3 tools/read_campaign.py [--present 60] [--absent 20]
 from __future__ import annotations
 
 import argparse
+import hashlib
 import concurrent.futures
 import json
 import random
@@ -46,6 +47,8 @@ from kimiya.runtime import _wilson  # noqa: E402
 # characters, and the instrument should be measured on the task it will
 # actually perform.
 CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+READ_PROMPT = 'Read the 8-character join code shown on this screen, exactly as displayed. If no join code is visible, respond with exactly NONE.'
 
 PROBE = '''agent V:
     backend = "claude_cli"
@@ -181,6 +184,12 @@ def main() -> int:
               f"claude-opus-4-8, seed {args.seed}, {time.strftime('%Y-%m-%d')}")
     sheet = {"read:k_read": {
         "alpha_hi": round(alpha_hi, 4), "beta_lo": round(beta_lo, 4),
+        # The instrument's identity includes its prompt template: the
+        # sheet binds to the probe's literal, and a reading made under a
+        # different template will not be priced by it.
+        "template_sha": hashlib.sha256(
+            READ_PROMPT.encode()).hexdigest()[:12],
+        "template": READ_PROMPT,
         "n_true": len(present), "n_false": len(absent),
         "source": source,
         "detail": {

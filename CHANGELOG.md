@@ -16,6 +16,40 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.11.0 — 2026-09-09
+- **Datasheets bind to prompt templates.** A read sheet may carry the
+  `template_sha` it was measured under (`kimiya datasheet` preserves it;
+  the shipped `datasheets/screen_read.json` is now bound to the campaign
+  probe's literal, and `tools/read_campaign.py` emits the binding). A
+  priced read whose template differs — or whose prompt was assembled at
+  run time — is not priced by that sheet: θ takes prior grade for it, the
+  certificate marks the instrument `template_mismatch`, and a ⚠ note
+  names both hashes. Completes the instrument-identity discipline that
+  1.7 (measured retrieval) and 1.10 (named templates) laid down.
+- **Secrets follow the data.** `"Bearer {token}"`, `"x-" + token` and
+  `str(token)` now yield secrets: redacted on every audit surface, real
+  value intact for computation. Per-operation propagation, not taint
+  analysis — other builtins still launder (README lists them).
+- **Model retrieval over text stores.** `select<ρ>(query, list) under k
+  by A` consults the agent (purpose + query + numbered candidates →
+  picks), priced under `select:<ctx>` like the keyword path, with a
+  labelable trace record. The keyword filter remains the no-`by` path.
+  The checker's "`by` has no effect on a text store" warning is gone; an
+  undeclared `by` agent is an error. Shared retriever in
+  `kimiya/retrieval.py`, now also behind the dom locate.
+- **`kimiya calibrate` labels retrieval readings** (model selects and
+  live dom locates) alongside judgments: found what mattered / missed
+  something relevant / nothing relevant existed — the labels feed the
+  same Wilson recompute as judges.
+- **A dom locate cache** (`.kimiya/dom_locates.json`), the twin of the
+  vision cache: exact hits on the same snapshot sha are free and silent;
+  `--replay` / `KIMIYA_REPLAY=1` reuses picks against a changed page and
+  the certificate counts and warns. Replay of a never-run locate
+  abstains.
+- Compiled artifacts import `_add` from the runtime instead of defining
+  it (secret-aware concatenation); older artifacts keep their own copy
+  and still run.
+
 ## 1.10.0 — 2026-08-30
 - **String interpolation**: a string literal in expression position may
   carry expression holes — `"n={len(xs)} mean={mean(xs)}"` — spliced at

@@ -612,11 +612,21 @@ class MockOracle(Oracle):
                  temperature: float = 0.2, max_tokens: int = 1024,
                  images: list | None = None, schema: dict | None = None,
                  think: bool = False) -> str:
-        if "DOM LOCATE" in system:
-            # Deterministic: the first candidate, or a stated miss.
+        if '"picks"' in system:
+            # The list retriever (text select by agent, dom locate):
+            # deterministic — candidates sharing a word (4+ letters) with
+            # the query, in order; the first candidate if none does; a
+            # stated miss on MOCKMISS.
             if "MOCKMISS" in prompt:
                 return json.dumps({"picks": []})
-            return json.dumps({"picks": [0]})
+            query = prompt.rsplit("QUERY:", 1)[-1].lower()
+            qwords = {w for w in re.findall(r"[a-z0-9]+", query) if len(w) > 3}
+            picks = []
+            for m in re.finditer(r"^(\d+)\. (.*)$", prompt, flags=re.M):
+                words = set(re.findall(r"[a-z0-9]+", m.group(2).lower()))
+                if words & qwords:
+                    picks.append(int(m.group(1)))
+            return json.dumps({"picks": picks or [0]})
         if "LOCATE" in system:
             if "MOCKMISS" in prompt:
                 return "[]"

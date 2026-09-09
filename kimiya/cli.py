@@ -310,8 +310,12 @@ def cmd_run(args):
         tag = "calibrated" if s["calibrated"] else "prior-grade"
         if s.get("source"):
             tag = f"measured: {s['source']}"
+        if s.get("template_mismatch"):
+            tag = "prior-grade — installed sheet did not transfer"
         print(f"  instrument {task}: α≤{s['alpha_hi']:.2f} "
-              f"β≥{s['beta_lo']:.2f} [{tag}]")
+              f"β≥{s['beta_lo']:.2f} [{tag}]"
+              + (f" · template {s['template_sha']}"
+                 if s.get("template_sha") else ""))
     for sha, tpl in cert.get("prompt_templates", {}).items():
         short = tpl.replace("\n", "⏎")
         if len(short) > 60:
@@ -367,7 +371,19 @@ def cmd_run(args):
             line += f" @ {dm['bridge']}"
         if dm.get("locates"):
             line += f", {dm['locates']} locate(s)"
+            extras = []
+            if dm.get("locates_cached"):
+                extras.append(f"{dm['locates_cached']} exact-cache")
+            if dm.get("locates_replayed"):
+                extras.append(f"{dm['locates_replayed']} replayed")
+            if extras:
+                line += f" ({', '.join(extras)})"
         print(line)
+        if dm.get("locates_replayed"):
+            print(f"  ⚠ {dm['locates_replayed']} dom locate(s) replayed from "
+                  "a prior run against a changed page — layout stability "
+                  "is assumed, not measured; the verdict gates still ran "
+                  "live")
         for em in dm.get("emits", []):
             print(f"  emit   : {em['channel']} sha {em['sha']} "
                   f"({em['len']} chars) — value not in certificate")
@@ -442,26 +458,53 @@ def cmd_calibrate(args):
     ws = Path(args.workspace)
     sheets = Datasheets(ws)
     trace = Trace(ws)
-    judges = []
+    records = []
     if trace.path.exists():
         for line in trace.path.read_text().splitlines():
             if line.strip():
                 rec = json.loads(line)
                 if rec.get("kind") == "judge":
-                    judges.append(rec)
-    if not judges:
-        print("no judge records in this workspace")
+                    records.append(rec)
+                elif rec.get("kind") == "dom_locate" and \
+                        rec.get("cache", "live") == "live":
+                    records.append(rec)
+                elif rec.get("kind") == "select" and rec.get("by"):
+                    records.append(rec)
+    if not records:
+        print("no judge or model-retrieval records in this workspace")
         return 1
-    random.shuffle(judges)
-    for i, rec in enumerate(judges[:args.n], 1):
-        print(f"--- {i}  task={rec['task']}  "
-              f"panel said {'YES' if rec['verdict'] else 'NO'} "
-              f"({rec['votes']}/{rec['k']})")
-        print(f"CLAIM: {rec.get('claim')}")
-        ans = input("supported? [y/n/s] ").strip().lower()
-        if ans in ("y", "n"):
-            sheets.add_label(rec["task"], truth=(ans == "y"),
-                             verdict=rec["verdict"])
+    random.shuffle(records)
+    for i, rec in enumerate(records[:args.n], 1):
+        if rec["kind"] == "judge":
+            print(f"--- {i}  task={rec['task']}  "
+                  f"panel said {'YES' if rec['verdict'] else 'NO'} "
+                  f"({rec['votes']}/{rec['k']})")
+            print(f"CLAIM: {rec.get('claim')}")
+            ans = input("supported? [y/n/s] ").strip().lower()
+            if ans in ("y", "n"):
+                sheets.add_label(rec["task"], truth=(ans == "y"),
+                                 verdict=rec["verdict"])
+            continue
+        # A retrieval reading: recall is P(retrieved | relevant existed),
+        # so the label says whether something relevant existed and
+        # whether the instrument surfaced it.
+        query = rec.get("query") or rec.get("description") or ""
+        picked = rec.get("picked") or rec.get("hits") or []
+        print(f"--- {i}  task={rec['task']}  retrieval by "
+              f"{rec.get('by') or rec.get('agent')}")
+        print(f"QUERY: {query}")
+        print("RETURNED: " + (" | ".join(str(x) for x in picked)
+                              if picked else "(nothing)"))
+        ans = input("y = found what mattered · n = missed something "
+                    "relevant · e = nothing relevant existed · s = skip "
+                    "[y/n/e/s] ").strip().lower()
+        if ans == "y":
+            sheets.add_label(rec["task"], truth=True, verdict=True)
+        elif ans == "n":
+            sheets.add_label(rec["task"], truth=True, verdict=False)
+        elif ans == "e":
+            sheets.add_label(rec["task"], truth=False,
+                             verdict=bool(picked))
     for task, s in sheets.recompute().items():
         print(f"  {task}: α≤{s['alpha_hi']:.3f} β≥{s['beta_lo']:.3f} "
               f"({'CALIBRATED' if s['calibrated'] else 'prior-grade'})")
@@ -492,6 +535,12 @@ def cmd_datasheet(args):
                   "n_false": int(sheet.get("n_false", 0)),
                   "calibrated": True,
                   "source": args.source or sheet.get("source") or ""}
+        # Template identity: a read sheet measured under one prompt
+        # template does not price a reading made under another. Carry
+        # the campaign's template hash so the runtime can check.
+        if sheet.get("template_sha"):
+            merged["template_sha"] = str(sheet["template_sha"])
+            merged["template"] = str(sheet.get("template", ""))[:400]
         if not merged["source"]:
             print(f"✗ {task}: refusing to install a sheet with no source — "
                   "pass --source \"<how it was measured>\"")
@@ -503,7 +552,9 @@ def cmd_datasheet(args):
         installed.append((task, merged))
     for task, s in installed:
         print(f"✓ {task}: α≤{s['alpha_hi']:.3f} β≥{s['beta_lo']:.3f} "
-              f"[imported: {s['source']}]")
+              f"[imported: {s['source']}]"
+              + (f" — bound to prompt template {s['template_sha']}"
+                 if s.get("template_sha") else ""))
     print(f"  written to {sheets.local_path}")
     return 0
 

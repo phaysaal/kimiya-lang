@@ -5,6 +5,8 @@
     "n_true": 60,
     "n_false": 20,
     "source": "screen-read campaign, 60 present + 20 absent rendered trials, claude_cli claude-opus-4-8, seed 42, 2026-07-27",
+    "template_sha": "2e63efcb6481",
+    "template": "Read the 8-character join code shown on this screen, exactly as displayed. If no join code is visible, respond with exactly NONE.",
     "detail": {
       "true_reads": 60,
       "misses": 0,

@@ -18,12 +18,13 @@ from pathlib import Path
 
 from . import dom
 from . import image as image_surface
+from . import retrieval
 from . import screen
 from . import vision
 from ._version import __version__ as KIMIYA_VERSION
 from .runtime import (Pool, Agent, Trace, Datasheets, MemoStore,
                       get_oracle, run_judge, run_gen, resolve_params,
-                      Secret, redact_value)
+                      Secret, redact_value, PRIOR_SHEET)
 
 
 class Bolt(Exception):
@@ -151,7 +152,11 @@ class Runtime:
         self.locates_replayed = 0
         self.dom_acts = 0
         self.dom_locates = 0
+        self.dom_locates_cached = 0
+        self.dom_locates_replayed = 0
+        self.dom_cache = dom.DomLocateCache(self.workspace)
         self.emit_records: list[dict] = []
+        self.untransferred: set = set()
         self.overclaims = []
         self.prompt_templates: dict[str, str] = {}   # sha -> skeleton
         self.image_observations: list[dict] = []
@@ -192,13 +197,34 @@ class Runtime:
                                "sha": sha})
         return sha
 
+    def read_sheet(self, task, tpl_sha):
+        """A priced read's datasheet, honouring template identity: a
+        sheet measured under another prompt template does not transfer
+        (θ takes prior grade, and the certificate says why)."""
+        sheet = self.sheets.get(task)
+        bound = sheet.get("template_sha")
+        if bound and bound != tpl_sha:
+            ran = (f"template {tpl_sha}" if tpl_sha
+                   else "no static template (prompt assembled at run time)")
+            note = (f"instrument {task} was measured under prompt template "
+                    f"{bound}; this reading ran under {ran} — the sheet "
+                    "does not transfer, θ uses prior grade")
+            if note not in self.overclaims:
+                self.overclaims.append(note)
+            self.untransferred.add(task)
+            self.trace.append({"kind": "template_mismatch", "task": task,
+                               "sheet_template": bound,
+                               "reading_template": tpl_sha})
+            return dict(PRIOR_SHEET)
+        return sheet
+
     def gen(self, schema: str, prompt: str, by: str | None, images=None,
             memo=False, context=None, template=None):
         agent = self.pool.agent(by) if by else self.pool.default_generator()
         self.last_gen = agent
         prompt = _to_str(prompt)
-        if template is not None:
-            self.record_template(template)
+        tpl_sha = (self.record_template(template)
+                   if template is not None else None)
         image_paths = None
         image_meta = []
         if images is not None:
@@ -233,7 +259,7 @@ class Runtime:
                         self.memo_counted.add(key)
                     self.add_theta(ent.get("factor_name", read_task),
                                    ent.get("factor",
-                                           self.sheets.get(read_task)
+                                           self.read_sheet(read_task, tpl_sha)
                                            ["beta_lo"]))
                 return ent["value"]
         self.cost["gen_calls"] += 1
@@ -249,7 +275,7 @@ class Runtime:
                           self.schemas[schema], images=image_paths)
         factor = None
         if read_task and out is not None:
-            factor = self.sheets.get(read_task)["beta_lo"]
+            factor = self.read_sheet(read_task, tpl_sha)["beta_lo"]
             self.add_theta(read_task, factor)
         if memo and out is not None:
             entry = {"value": out, "agent": agent.label()}
@@ -266,6 +292,11 @@ class Runtime:
             return self.select_vision(recall, query, store, ctx, by)
         if isinstance(store, dict) and store.get("kind") == "dom":
             return self.select_dom(recall, query, store, ctx, by)
+        task = f"select:{ctx or 'unscoped'}"
+        sheet = self.sheets.get(task)
+        if by:
+            return self.select_by_model(recall, _to_str(query), store, ctx,
+                                        by, task, sheet)
         words = {w for w in str(query).lower().split() if len(w) > 3}
 
         def score(x):
@@ -274,9 +305,34 @@ class Runtime:
 
         hits = [x for x in sorted(store, key=lambda x: -score(x))
                 if score(x) > 0] or list(store)
-        task = f"select:{ctx or 'unscoped'}"
-        sheet = self.sheets.get(task)
         self.add_theta(task, sheet["beta_lo"])
+        self._note_overclaim(recall, task, sheet)
+        self.trace.append({"kind": "select", "task": task, "recall": recall,
+                           "mechanism": "keyword",
+                           "store_size": len(store), "hits": len(hits)})
+        return hits
+
+    def select_by_model(self, recall, query, store, ctx, by, task, sheet):
+        agent = self.pool.agent(by)
+        cands = list(store)[:retrieval.MAX_CANDIDATES]
+        lines = [retrieval.truncate(_to_str(x)) for x in cands]
+        purpose = self.contexts.get(ctx, ctx or "unscoped")
+        picks, err = retrieval.pick(self.oracle, agent, lines, query,
+                                    purpose)
+        hits = [cands[i] for i in picks]
+        self.add_theta(task if hits else f"neg:{task}",
+                       sheet["beta_lo"] if hits
+                       else 1 - sheet["alpha_hi"])
+        self._note_overclaim(recall, task, sheet)
+        self.trace.append({"kind": "select", "task": task, "recall": recall,
+                           "mechanism": "model", "by": agent.label(),
+                           "query": query[:200],
+                           "store_size": len(store), "hits": len(hits),
+                           "picked": [lines[i][:120] for i in picks],
+                           **({"error": err} if err else {})})
+        return hits
+
+    def _note_overclaim(self, recall, task, sheet):
         if recall > sheet["beta_lo"]:
             note = (f"declared recall {recall} exceeds the measured "
                     f"β≥{sheet['beta_lo']:.3f} of instrument {task} — θ "
@@ -286,9 +342,6 @@ class Runtime:
             self.trace.append({"kind": "overclaim", "task": task,
                                "declared_recall": recall,
                                "measured_beta_lo": sheet["beta_lo"]})
-        self.trace.append({"kind": "select", "task": task, "recall": recall,
-                           "store_size": len(store), "hits": len(hits)})
-        return hits
 
     def select_vision(self, recall, query, shot, ctx, by):
         if not shot.get("exists"):
@@ -331,11 +384,19 @@ class Runtime:
         agent = (self.pool.agent(by) if by
                  else self.pool.default_generator())
         purpose = self.contexts.get(ctx, ctx or "unscoped")
-        hits = dom.locate(self.oracle, agent, self.trace, snap,
-                          _to_str(query), purpose, ctx)
+        try:
+            hits, source = dom.locate(
+                self.oracle, agent, self.trace, snap, _to_str(query),
+                purpose, ctx, cache=self.dom_cache, replay=self.replay)
+        except dom.ReplayMiss as e:
+            raise Bolt(f"select: {e}") from None
         task = dom.locate_task(ctx)
         sheet = self.sheets.get(task)
         self.dom_locates += 1
+        if source == "exact":
+            self.dom_locates_cached += 1
+        elif source == "replay":
+            self.dom_locates_replayed += 1
         self.add_theta(task if hits else f"neg:{task}",
                        sheet["beta_lo"] if hits
                        else 1 - sheet["alpha_hi"])
@@ -676,7 +737,9 @@ class Runtime:
             "theta": round(theta, 4),
             "theta_factors": [(n, round(x, 4)) for n, x in self.theta],
             "uncertified_judgments": self.uncertified,
-            "instruments": {t: self.sheets.get(t) for t in tasks},
+            "instruments": {t: (dict(PRIOR_SHEET, template_mismatch=True)
+                                if t in self.untransferred
+                                else self.sheets.get(t)) for t in tasks},
             "python_extensions": self.py_exts,
             "egress": egress,
             "image_observations": list(self.image_observations),
@@ -695,6 +758,8 @@ class Runtime:
                      "bridge": dom.bridge_host(),
                      "acts": self.dom_acts,
                      "locates": self.dom_locates,
+                     "locates_cached": self.dom_locates_cached,
+                     "locates_replayed": self.dom_locates_replayed,
                      "emits": list(self.emit_records)}
                     if self.dom_acts or self.dom_locates else None),
             "overclaims": list(self.overclaims),
@@ -767,7 +832,19 @@ class Runtime:
                 line += f" @ {dm['bridge']}"
             if dm.get("locates"):
                 line += f", {dm['locates']} locate(s)"
+                extras = []
+                if dm.get("locates_cached"):
+                    extras.append(f"{dm['locates_cached']} exact-cache")
+                if dm.get("locates_replayed"):
+                    extras.append(f"{dm['locates_replayed']} replayed")
+                if extras:
+                    line += f" ({', '.join(extras)})"
             print(line)
+            if dm.get("locates_replayed"):
+                print(f"  ⚠ {dm['locates_replayed']} dom locate(s) replayed "
+                      "from a prior run against a changed page — layout "
+                      "stability is assumed, not measured; the verdict "
+                      "gates still ran live")
             for em in dm.get("emits", []):
                 print(f"  emit   : {em['channel']} sha {em['sha']} "
                       f"({em['len']} chars) — value not in certificate")
@@ -785,6 +862,8 @@ class Runtime:
 
 
 def _to_str(v) -> str:
+    if isinstance(v, Secret):
+        return v            # str(secret) must not launder it
     if v is None:
         return "null"
     if isinstance(v, bool):
@@ -798,10 +877,23 @@ def _tpl(parts, vals) -> str:
     """An interpolated string literal: splice each value's text between
     the template's fixed parts (len(parts) == len(vals) + 1)."""
     out = [parts[0]]
+    tainted = False
     for i, v in enumerate(vals):
+        tainted = tainted or isinstance(v, Secret)
         out.append(_to_str(v))
         out.append(parts[i + 1])
-    return "".join(out)
+    return Secret("".join(out)) if tainted else "".join(out)
+
+
+def _add(a, b):
+    """Kimiya `+`: text if either side is text; a secret operand
+    makes the result a secret (redaction follows the data)."""
+    if isinstance(a, str) or isinstance(b, str):
+        joined = _to_str(a) + _to_str(b)
+        if isinstance(a, Secret) or isinstance(b, Secret):
+            return Secret(joined)
+        return joined
+    return a + b
 
 
 def _pyify(v):

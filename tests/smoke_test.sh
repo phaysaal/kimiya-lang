@@ -457,7 +457,7 @@ context k_r:
     allow_loss = [font]
 shot := observe screen("eDP-1")
 check shot.exists
-r := gen<Reading>("Read the code shown.", images=[shot]) under k_r by A
+r := gen<Reading>("Read the 8-character join code shown on this screen, exactly as displayed. If no join code is visible, respond with exactly NONE.", images=[shot]) under k_r by A
 check len(r.text) > 0
 commit(r)
 KIM
@@ -491,6 +491,28 @@ p2=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
      python3 -m kimiya run sread.kim)
 grep -q "0.9398" <<<"$p2" \
   || { echo "FAIL: measured read sheet not applied"; echo "$p2"; exit 1; }
+grep -q "template 2e63efcb6481" <<<"$p2" \
+  || { echo "FAIL: bound template not cited"; echo "$p2"; exit 1; }
+# the same instrument read under a DIFFERENT prompt: the sheet was
+# measured under one template and says nothing about another
+sed 's/Read the 8-character join code shown on this screen, exactly as displayed. If no join code is visible, respond with exactly NONE./Read the code shown./' sread.kim > sread2.kim
+p3=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" \
+     python3 -m kimiya run sread2.kim)
+grep -q "does not transfer" <<<"$p3" \
+  || { echo "FAIL: template mismatch not reported"; echo "$p3"; exit 1; }
+python3 - <<'PY2' || { echo "FAIL: mismatched sheet still priced the read"; exit 1; }
+import json
+c = json.load(open(".kimiya/certificate.json"))
+assert dict(c["theta_factors"])["read:k_r"] == 0.6, c["theta_factors"]
+assert c["instruments"]["read:k_r"].get("template_mismatch") is True
+PY2
+# compiled artifact: same refusal
+KIMIYA_MOCK=1 python3 -m kimiya compile sread2.kim --out srd2.py >/dev/null
+p4=$(KIMIYA_MOCK=1 KIMIYA_SCREEN=none KIMIYA_SCREEN_FIXTURE="$FIXTURE" python3 srd2.py)
+grep -q "does not transfer" <<<"$p4" \
+  || { echo "FAIL: compiled template mismatch"; echo "$p4"; exit 1; }
+grep -q "('read:k_r', 0.6)" <<<"$p4" \
+  || { echo "FAIL: compiled mismatched read not prior-graded"; echo "$p4"; exit 1; }
 # text-only gen contributes no factor (the evolution property)
 printf 'pool A = "llama3.1:8b"\nx := gen<Text>("hi") by A\ncheck len(x) > 0\ncommit(x)\n' > tg.kim
 tgo=$(KIMIYA_MOCK=1 python3 -m kimiya run tg.kim)
@@ -583,6 +605,71 @@ grep -q "n=3 first=4 who=Ada lit={esc}" <<<"$ic" \
 grep -q 'template .* : "State only what these stats show: {}"' <<<"$ic" \
   || { echo "FAIL: compiled template"; echo "$ic"; exit 1; }
 
+echo "== secrets follow the data: interpolation, +, str =="
+cat > sflow.kim <<'KIM'
+pool A = "llama3.1:8b"
+param tok: secret
+hdr := "Bearer {tok}"
+tail := "x-" + tok
+s := str(tok)
+print hdr
+print tail
+print s
+print len(hdr)
+commit(hdr)
+KIM
+rm -rf .kimiya
+sf=$(KIMIYA_MOCK=1 python3 -m kimiya run sflow.kim tok=hunter2flow)
+grep -q "hunter2flow" <<<"$sf" && { echo "FAIL: derived secret printed"; echo "$sf"; exit 1; }
+test "$(grep -c '^<redacted:' <<<"$sf")" = 3 \
+  || { echo "FAIL: derived secrets not redacted on print"; echo "$sf"; exit 1; }
+grep -q "^18$" <<<"$sf" || { echo "FAIL: derived secret lost its value"; echo "$sf"; exit 1; }
+grep -q 'value  : "<redacted:' <<<"$sf" \
+  || { echo "FAIL: committed derived secret not redacted"; echo "$sf"; exit 1; }
+grep -rq "hunter2flow" .kimiya && { echo "FAIL: derived secret leaked into workspace"; exit 1; }
+KIMIYA_MOCK=1 python3 -m kimiya compile sflow.kim --out sflow_c.py >/dev/null
+rm -rf .kimiya
+sfc=$(KIMIYA_MOCK=1 python3 sflow_c.py tok=hunter2flow)
+grep -q "hunter2flow" <<<"$sfc" && { echo "FAIL: compiled derived secret printed"; exit 1; }
+test "$(grep -c '^<redacted:' <<<"$sfc")" = 3 \
+  || { echo "FAIL: compiled derived secrets"; echo "$sfc"; exit 1; }
+grep -rq "hunter2flow" .kimiya && { echo "FAIL: compiled derived secret leaked"; exit 1; }
+
+echo "== model retrieval: select by agent over a text store =="
+cat > msel.kim <<'KIM'
+pool A = "llama3.1:8b"
+context k_ev:
+    domain     = "notes bearing on the query"
+    preserve   = [evidential_support]
+    allow_loss = [style]
+notes := ["Budget unchanged.", "The deadline moved to Friday by the sponsor.", "Invoice 42 paid."]
+hits := select<0.9>("the note about the deadline", notes) under k_ev by A
+check len(hits) > 0
+print first(hits)
+commit(first(hits))
+KIM
+rm -rf .kimiya
+ms=$(KIMIYA_MOCK=1 python3 -m kimiya run msel.kim)
+grep -q "^The deadline moved to Friday" <<<"$ms" \
+  || { echo "FAIL: model select did not retrieve the relevant note"; echo "$ms"; exit 1; }
+grep -q "('select:k_ev', 0.6)" <<<"$ms" \
+  || { echo "FAIL: model select not priced under select:k_ev"; echo "$ms"; exit 1; }
+grep -q '"mechanism": "model"' .kimiya/trace.jsonl \
+  || { echo "FAIL: model select not traced as such"; exit 1; }
+# a retrieval reading can be labelled; the sheet tightens from labels
+cal=$(printf 'y\n' | python3 -m kimiya calibrate .kimiya -n 1)
+grep -q "retrieval by A=" <<<"$cal" \
+  || { echo "FAIL: calibrate did not offer the retrieval record"; echo "$cal"; exit 1; }
+grep -q "select:k_ev:" <<<"$cal" \
+  || { echo "FAIL: calibrate did not recompute select:k_ev"; echo "$cal"; exit 1; }
+KIMIYA_MOCK=1 python3 -m kimiya compile msel.kim --out msel_c.py >/dev/null
+rm -rf .kimiya
+msc=$(KIMIYA_MOCK=1 python3 msel_c.py)
+grep -q "^The deadline moved to Friday" <<<"$msc" \
+  || { echo "FAIL: compiled model select"; echo "$msc"; exit 1; }
+grep -q "('select:k_ev', 0.6)" <<<"$msc" \
+  || { echo "FAIL: compiled model select pricing"; echo "$msc"; exit 1; }
+
 echo "== dom world: bridge-driven webview, priced locate, gated emit =="
 cp "$OLDPWD_REPO/examples/linkedin_collect_dom.kim" .
 cp "$OLDPWD_REPO/tests/fixtures/dom_snapshot.json" .
@@ -615,6 +702,21 @@ PY
 # the harvested value must never land on an audit surface
 grep -rq "DOMSENTINEL9" .kimiya \
   && { echo "FAIL: emitted value leaked into the workspace"; exit 1; }
+# the dom locate cache: same snapshot -> exact hit, free and silent
+dout_c=$(KIMIYA_MOCK=1 KIMIYA_DOM=none KIMIYA_DOM_FIXTURE="$PWD/dom_snapshot.json" \
+         KIMIYA_DOM_VIEW_FIXTURE="$FIXTURE" \
+         python3 -m kimiya run linkedin_collect_dom.kim)
+grep -q "1 locate(s) (1 exact-cache)" <<<"$dout_c" \
+  || { echo "FAIL: dom locate exact-cache hit not taken"; echo "$dout_c"; exit 1; }
+# a changed page: replay reuses the cached nodes, and says so
+sed 's/Dhaka, Bangladesh/Kyoto, Japan/' dom_snapshot.json > dom_snapshot2.json
+dout_r=$(KIMIYA_MOCK=1 KIMIYA_DOM=none KIMIYA_DOM_FIXTURE="$PWD/dom_snapshot2.json" \
+         KIMIYA_DOM_VIEW_FIXTURE="$FIXTURE" KIMIYA_REPLAY=1 \
+         python3 -m kimiya run linkedin_collect_dom.kim)
+grep -q "1 replayed" <<<"$dout_r" \
+  || { echo "FAIL: dom locate replay not disclosed"; echo "$dout_r"; exit 1; }
+grep -q "dom locate(s) replayed" <<<"$dout_r" \
+  || { echo "FAIL: dom replay warning missing"; echo "$dout_r"; exit 1; }
 # compiled artifact: identical pricing and the same redaction
 KIMIYA_MOCK=1 python3 -m kimiya compile linkedin_collect_dom.kim \
   --out dart.py >/dev/null

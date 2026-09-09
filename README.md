@@ -12,7 +12,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.10.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.11.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.4.0`; compiled runs
 also record the compiler version, and an artifact refuses to run across
@@ -179,6 +179,16 @@ measured recall (here: to 0.57 at β≥0.95). When relevance is
 mechanically decidable, use the kernel path instead — `filter` /
 `contains` are recall-1 retrieval at certainty 1, factor-free.
 
+**Two mechanisms, one accounting (since 1.11).** Without `by`, a text
+`select` is a mechanical keyword filter. With `by A` it is a *model
+retriever*: the agent is shown the purpose, the query and a numbered
+list of the store's members and picks the ones that bear on the query —
+the same instrument the dom world uses to pick elements. Either way the
+factor is `select:<purpose>` at the datasheet's conservative end; the
+model path additionally leaves a labelable trace record, so
+`kimiya calibrate` can tighten the sheet from your own judgments of
+what it found and missed.
+
 ## Strings that compute — and prompts with named templates (since 1.10)
 
 A string literal in expression position may carry holes:
@@ -204,6 +214,17 @@ template each reading ran under. A prompt assembled at run time
 (`"…" + facts`) has no skeleton and records none; the absence is itself
 the audit signal. Compiled artifacts carry the skeleton from compile
 time and cite the identical hash.
+
+**Datasheets bind to templates (since 1.11).** A priced read's datasheet
+may name the prompt template it was measured under (`template_sha` in
+the sheet — `kimiya datasheet` carries it, and the shipped
+`datasheets/screen_read.json` is bound to the campaign probe's literal).
+When a reading's template differs — or the prompt was assembled at run
+time and has none — the sheet **does not transfer**: θ takes prior grade
+for that reading, the certificate marks the instrument
+`installed sheet did not transfer`, and a ⚠ note names both hashes.
+This is the paper's instrument-identity discipline made mechanical: the
+number you earned under one prompt cannot be spent under another.
 
 ## Images: `observe image` and multimodal `gen`
 
@@ -351,10 +372,13 @@ redaction weakens nothing. `token=env:VAR` reads the value from the
 environment at resolve time (refusing, while refusal is still free, if
 unset) so it never touches the command line; a secret param cannot have
 a default, because a secret literal in source is disclosed to every
-reader — the checker rejects it. One honest limit: redaction is
-per-value, not taint analysis — a string *derived* from a secret
-(concatenation, slicing) is plain text, and `paste` still leaves the
-real value on the seat's clipboard after the run.
+reader — the checker rejects it. Since 1.11 redaction follows the data
+through the common derivations: `"Bearer {token}"`, `"x-" + token` and
+`str(token)` are secrets too, redacted on every audit surface while
+computing normally (`len` still sees the real value). Two honest limits
+remain: other builtins (`lower`, `trim`, `join`, slicing) launder — this
+is per-operation propagation, not taint analysis — and `paste` still
+leaves the real value on the seat's clipboard after the run.
 
 **Why a declaration, not an argv read.** `param` is deliberately
 backend-neutral: the program never touches a raw argument list. The
@@ -876,7 +900,8 @@ GUARD    := check E
           | judge<K,TAU> shows(E, E) under CTX [panel [P,...]]
 rhs      := ... | select<RECALL>(E, E) [under CTX] [by POOL]
                                        -- `by` required for a screen or
-                                       -- dom store
+                                       -- dom store; on a text store it
+                                       -- selects the model retriever
           | observe screen[<ACTOR>]([NAME | x, y, w, h])
 ```
 
@@ -943,11 +968,12 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
 
 ## Honest limitations (v0.1)
 
-- Text `select`'s *mechanism* is still a keyword filter — a weak
-  retriever. Since 1.7 its θ factor is honest about that (the
+- Text `select` without `by` is a keyword filter — a weak retriever;
+  `by A` (since 1.11) consults a model instead. Both are priced at the
   `select:<purpose>` datasheet's conservative end, prior-grade until
-  measured), but a measured sheet must come from a real retrieval
-  campaign; `calibrate` does not yet label per-item relevance.
+  measured; `calibrate` labels model-retrieval readings (found what
+  mattered / missed something / nothing relevant existed) but cannot
+  label the keyword path, which records no per-item picks.
 - θ accounting is the simple per-step conservative product; abstention
   probability is not separately bounded.
 - Prompt templates are cited only for literal prompts (interpolated or
@@ -967,9 +993,12 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
   sends code and logs every op, but a malicious host binary is outside
   the certificate's claims — the program is the auditable contract, not
   the app around it.
-- `dom` locates have no cache yet (every select is a live model read),
-  and `kimiya calibrate` does not label them; a `dom_locate:<purpose>`
-  sheet must come from an external campaign (`kimiya datasheet`).
+- `dom` locates are cached like screen locates (exact hit on the same
+  snapshot sha; `--replay` reuses picks against a changed page and says
+  so), and `kimiya calibrate` labels them; the replay key is
+  (task, description) only, so a redesigned page replays selectors for
+  a layout that no longer exists — the host's `matched: 0` and the live
+  gates catch it, the cache won't warn first.
 - DOM content is adversary-controlled text (the page can say anything);
   that is why the authenticity gate judges the *pixels*, and why
   `dom.emit` is gated. Under `KIMIYA_DOM=none` the snapshot fixture is
@@ -1002,8 +1031,9 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
 - `screen.type` and `screen.paste` text is echoed into the trace
   (truncated at 200 chars) because that is what makes a run auditable —
   type or paste a secret only through a `secret` param, which the echo
-  redacts. Redaction is per-value, not taint analysis: a string
-  *derived* from a secret is plain text and is echoed like any other
+  redacts. Redaction follows the data through interpolation, `+` and
+  `str` (since 1.11) but not through other builtins — a `lower`ed or
+  `join`ed secret is plain text and is echoed like any other
   value. `paste` additionally **leaves the text on the seat's clipboard
   after the run** — a pasted secret outlives the program and is one
   Ctrl+V away for whoever uses that display next, redacted trace or

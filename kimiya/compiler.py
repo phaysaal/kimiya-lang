@@ -249,7 +249,7 @@ class Compiler:
         self.emit("import sys")
         self.emit("import importlib, importlib.util")
         self.emit("from kimiya.compiled_runtime import Runtime, Bolt, "
-                  "_to_str, _pyify, _tpl, parse_cli")
+                  "_to_str, _pyify, _tpl, _add, parse_cli")
         self.emit()
         # repr, not json.dumps: agent fields may be booleans (vision), and
         # JSON's `true` is not Python.
@@ -259,13 +259,6 @@ class Compiler:
         self.emit(f"_CONTEXTS = {json.dumps(contexts)}")
         self.emit(f"_SCHEMAS = {json.dumps(schemas)}")
         self.emit(f"_PY_EXTS = {json.dumps(self.py_exts)}")
-        self.emit()
-        self.emit("def _add(a, b):")
-        self.indent += 1
-        self.emit("if isinstance(a, str) or isinstance(b, str):")
-        self.emit("    return _to_str(a) + _to_str(b)")
-        self.emit("return a + b")
-        self.indent -= 1
         self.emit()
         self.emit("def _v(env, name):")
         self.indent += 1

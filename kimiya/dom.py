@@ -62,7 +62,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -350,28 +350,10 @@ def stable(timeout_ms: int = 8000) -> bool:
 # its factor enters θ under dom_locate:<purpose> at the datasheet's
 # conservative end, exactly like the vision locate; its datasheet key is
 # its own (a screen-locate measurement says nothing about DOM reading).
+# The model-facing half is the shared retriever in kimiya/retrieval.py.
 
-DOM_LOCATE_SYSTEM = (
-    "You are a DOM LOCATE instrument: you pick the elements of a web "
-    "page that match a description. You are given a numbered list of "
-    "candidate elements (selector, role, text). Return ONLY a JSON "
-    'object {"picks": [<candidate numbers>]}, best match first. Return '
-    '{"picks": []} if no candidate matches. No prose, no markdown '
-    "fences.")
+from . import retrieval as _retrieval  # noqa: E402
 
-DOM_LOCATE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "picks": {"type": "array", "items": {"type": "integer"}},
-    },
-    "required": ["picks"],
-    "additionalProperties": False,
-}
-
-# Candidate lists are bounded so a pathological page cannot become a
-# megabyte of prompt; visible elements survive the cut first.
-MAX_CANDIDATES = 200
-CANDIDATE_TEXT_LIMIT = 120
 PAGE_TEXT_LIMIT = 2000
 
 
@@ -380,66 +362,105 @@ def locate_task(context: str | None) -> str:
     return f"dom_locate:{context or 'unscoped'}"
 
 
-def _parse_picks(text: str, n: int) -> list[int]:
-    text = re.sub(r"^```(json)?|```$", "", text.strip(), flags=re.M).strip()
-    m = re.search(r"\{.*\}", text, flags=re.S) or \
-        re.search(r"\[.*\]", text, flags=re.S)
-    if not m:
-        return []
-    try:
-        raw = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return []
-    if isinstance(raw, dict):
-        raw = raw.get("picks", [])
-    if not isinstance(raw, list):
-        return []
-    picks = []
-    for v in raw:
-        try:
-            i = int(v)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= i < n and i not in picks:
-            picks.append(i)
-    return picks
+class ReplayMiss(Exception):
+    """Replay mode was asked for a locate that was never run live."""
+
+
+class DomLocateCache:
+    """Past dom locates, keyed by (task, description) — the dom world's
+    twin of the vision LocateCache, with the same two grades:
+
+      * exact  — the current snapshot's sha equals the cached one: the
+                 same page, the same reading; free and silent.
+      * replay — KIMIYA_REPLAY=1 / --replay: the page changed but the
+                 cached nodes are reused anyway; disclosed in the
+                 certificate. Sound only because a locate never carries
+                 the verdict: a stale selector fails at the host
+                 (matched: 0) or drives the live gates to refuse.
+
+    Only non-empty results are cached — a miss may be transient.
+    """
+
+    def __init__(self, workspace):
+        self.path = Path(workspace) / "dom_locates.json"
+        self._d: dict = {}
+        if self.path.exists():
+            try:
+                self._d = json.loads(self.path.read_text())
+            except (json.JSONDecodeError, OSError):
+                self._d = {}
+
+    @staticmethod
+    def key(task: str, description: str) -> str:
+        return f"{task}|{description}"
+
+    def get(self, task: str, description: str) -> dict | None:
+        return self._d.get(self.key(task, description))
+
+    def put(self, task: str, description: str, hits: list[dict],
+            sha: str, agent_label: str):
+        self._d[self.key(task, description)] = {
+            "nodes": [dict(h) for h in hits], "sha": sha,
+            "agent": agent_label, "ts": time.time()}
+        self.path.write_text(json.dumps(self._d, indent=2))
+
+
+def _candidate_line(x: dict) -> str:
+    return (f"selector={x['selector']!r} role={x['role']!r} "
+            f"text={_retrieval.truncate(x['text'], 120)!r} "
+            f"visible={x['visible']}")
 
 
 def locate(oracle, agent, trace, snap: dict, description: str,
-           purpose: str, context: str | None) -> list[dict]:
-    """Find nodes matching `description` in a DOM snapshot. Best first."""
+           purpose: str, context: str | None,
+           cache: DomLocateCache | None = None,
+           replay: bool = False) -> tuple[list[dict], str]:
+    """Find nodes matching `description` in a DOM snapshot. Best first.
+
+    Returns (hits, source) with source one of "live", "exact", "replay".
+    """
     task = locate_task(context)
+    ent = cache.get(task, description) if cache else None
+    source = None
+    if ent and ent.get("sha") and ent["sha"] == snap.get("sha"):
+        source = "exact"
+    elif replay:
+        if ent is None:
+            raise ReplayMiss(
+                f"no cached dom locate for {description!r} — run live "
+                "once before replaying")
+        source = "replay"
+    if source:
+        assert ent is not None
+        hits = [dict(n) for n in ent["nodes"]]
+        trace.append({"kind": "dom_locate", "task": task, "cache": source,
+                      "description": description[:200],
+                      "snapshot_sha": snap.get("sha", ""),
+                      "cached_sha": ent.get("sha", ""),
+                      "agent": ent.get("agent", "cached"),
+                      "hits": [x["selector"] for x in hits]})
+        return hits, source
+
     nodes = snap.get("nodes") or []
     ranked = (sorted(nodes, key=lambda x: not x.get("visible", True))
-              [:MAX_CANDIDATES])
-    lines = []
-    for i, x in enumerate(ranked):
-        t = x["text"]
-        if len(t) > CANDIDATE_TEXT_LIMIT:
-            t = t[:CANDIDATE_TEXT_LIMIT] + "…"
-        lines.append(f"{i}. selector={x['selector']!r} role={x['role']!r} "
-                     f"text={t!r} visible={x['visible']}")
-    prompt = (f"PURPOSE: {purpose}\n\n"
-              f"PAGE TEXT (head):\n{snap.get('text', '')[:PAGE_TEXT_LIMIT]}"
-              f"\n\nCANDIDATE ELEMENTS:\n" + "\n".join(lines)
-              + f"\n\nLocate: {description}")
-    try:
-        out = oracle.complete(agent, prompt, system=DOM_LOCATE_SYSTEM,
-                              temperature=0.0, max_tokens=512,
-                              schema=DOM_LOCATE_SCHEMA)
-        err = None
-    except (OSError, RuntimeError) as e:
-        out, err = "", str(e)[:200]
-    picks = _parse_picks(out, len(ranked))
+              [:_retrieval.MAX_CANDIDATES])
+    lines = [_candidate_line(x) for x in ranked]
+    preamble = ("PAGE TEXT (head):\n"
+                + str(snap.get("text", ""))[:PAGE_TEXT_LIMIT])
+    picks, err = _retrieval.pick(oracle, agent, lines, description,
+                                 purpose, preamble)
     hits = [dict(ranked[i]) for i in picks]
-    trace.append({"kind": "dom_locate", "task": task,
+    if cache and hits and not err:
+        cache.put(task, description, hits, snap.get("sha", ""),
+                  agent.label())
+    trace.append({"kind": "dom_locate", "task": task, "cache": "live",
                   "description": description[:200],
                   "snapshot_sha": snap.get("sha", ""),
                   "candidates": len(ranked),
                   "agent": agent.label(),
                   "hits": [x["selector"] for x in hits],
                   **({"error": err} if err else {})})
-    return hits
+    return hits, "live"
 
 
 # ---------------------------------------------------------------- doctor

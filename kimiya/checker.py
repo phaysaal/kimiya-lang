@@ -311,11 +311,11 @@ def check(prog: A.Program, py_fn_names=frozenset()) -> CheckReport:
                       "(dom_locate:<context>)")
             return
         if not is_screenshot(sel.store):
-            if sel.by:
-                r.warn(sel.line,
-                       f"'by {sel.by}' on a select over a non-screen store "
-                       "has no effect — text select is a mechanical filter, "
-                       "no model is consulted")
+            # A text store: mechanical keyword filter without `by`; a
+            # model retriever with it (priced under select:<ctx> either
+            # way — the mechanism differs, the accounting does not).
+            if sel.by and sel.by not in pools:
+                r.err(sel.line, f"'by {sel.by}': not a declared pool")
             if not sel.context:
                 r.warn(sel.line,
                        "select is a retrieval instrument; without `under "
