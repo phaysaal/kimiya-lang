@@ -776,11 +776,24 @@ def run_judge(pool: Pool, oracle: Oracle, trace: Trace, sheets: Datasheets,
 
 def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
             schema_fields: list[str] | None, budget: int = 3,
-            images: list | None = None):
-    """schema_fields None => free text; else JSON with those fields."""
+            images: list | None = None, meter=None):
+    """schema_fields None => free text; else JSON with those fields.
+
+    `meter`, when given, is called once per *provider* call. A schema
+    miss is resampled here, so one `gen` statement can cost several
+    calls, and a meter that counted statements would understate the
+    price of the very thing budgets exist to bound (the paper's
+    "resamples until valid inside a nominal unit cost").
+    """
     who = agent.label()
+
+    def bill():
+        if meter is not None:
+            meter()
+
     if schema_fields is None:
         try:
+            bill()
             out = oracle.complete(agent, prompt, temperature=0.3,
                                   images=images)
             trace.append({"kind": "gen", "agent": who,
@@ -809,6 +822,7 @@ def run_gen(oracle: Oracle, trace: Trace, agent: Agent, prompt: str,
     room = max(4096, 512 * len(schema_fields))
     for attempt in range(budget):
         try:
+            bill()
             out = oracle.complete(agent, full, system=GEN_SYSTEM,
                                   temperature=0.3 + 0.2 * attempt,
                                   max_tokens=room,

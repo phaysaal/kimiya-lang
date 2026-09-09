@@ -46,6 +46,9 @@ class Parser:
     def __init__(self, source: str):
         self.toks = lex(source)
         self.i = 0
+        # Surface statements that elaborate into more than one core
+        # statement queue the extras here; `stmt()` drains them first.
+        self.pending: list = []
 
     # ------------- token helpers -------------
     def peek(self, off=0) -> Token:
@@ -284,6 +287,8 @@ class Parser:
         return stmts
 
     def stmt(self):
+        if self.pending:
+            return self.pending.pop(0)
         t = self.peek()
         if self.at_kw("check"):
             self.next()
@@ -365,6 +370,38 @@ class Parser:
             name = self.next().value
             self.next()  # :=
             rhs = self.rhs()
+            # The union form of the paper's §2: a coverage claim
+            # assembled from a mechanical closure (recall 1) and a
+            # judged retrieval (measured recall). `select` stays an
+            # instruction, never an expression -- the surface `+` binds
+            # the retrieval to a fresh name and unions the results, so
+            # each retrieval keeps its own theta factor and its own
+            # datasheet.
+            if isinstance(rhs, A.SelectExpr) or self.at("OP", "+"):
+                parts, k = [rhs], 0
+                while self.at("OP", "+"):
+                    self.next()
+                    parts.append(self.rhs())
+                if len(parts) > 1:
+                    pre, names = [], []
+                    for part in parts:
+                        if isinstance(part, A.SelectExpr):
+                            tmp = f"{name}#{k}"
+                            k += 1
+                            pre.append(A.Assign(tmp, part, t.line))
+                            names.append(A.Var(tmp, t.line))
+                        else:
+                            names.append(part)
+                    union = names[0]
+                    for nxt in names[1:]:
+                        union = A.BinOp("+", union, nxt, t.line)
+                    self.end_stmt()
+                    # Each retrieval must be bound before the union that
+                    # reads it, so the selects are emitted first and the
+                    # union is queued behind them.
+                    self.pending.extend(pre[1:])
+                    self.pending.append(A.Assign(name, union, t.line))
+                    return pre[0]
             if not isinstance(rhs, A.RetryStmt):   # block rhs ends itself
                 self.end_stmt()
             return A.Assign(name, rhs, t.line)
@@ -591,6 +628,13 @@ class Parser:
     def add_expr(self):
         left = self.unary_expr()
         while self.at("OP") and self.peek().value in ("+", "-"):
+            # `... + select<r>(q, w)` is not an expression: `select` is an
+            # instruction that carries a datasheet and a theta factor, so
+            # it may not hide inside one. Leave the `+` for the
+            # assignment's union form to elaborate.
+            if self.peek().value == "+" and self.peek(1).kind == "KEYWORD" \
+                    and self.peek(1).value == "select":
+                break
             t = self.next()
             left = A.BinOp(t.value, left, self.unary_expr(), t.line)
         return left

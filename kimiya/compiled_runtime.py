@@ -262,17 +262,19 @@ class Runtime:
                                            self.read_sheet(read_task, tpl_sha)
                                            ["beta_lo"]))
                 return ent["value"]
-        self.cost["gen_calls"] += 1
+        def bill():
+            self.cost["gen_calls"] += 1
         if schema == "Text":
             out = run_gen(self.oracle, self.trace, agent, prompt, None,
-                          images=image_paths)
+                          images=image_paths, meter=bill)
         elif schema == "Json":
             out = run_gen(self.oracle, self.trace, agent,
                           prompt + "\n\nFIELDS: result", ["result"],
-                          images=image_paths)
+                          images=image_paths, meter=bill)
         else:
             out = run_gen(self.oracle, self.trace, agent, prompt,
-                          self.schemas[schema], images=image_paths)
+                          self.schemas[schema], images=image_paths,
+                          meter=bill)
         factor = None
         if read_task and out is not None:
             factor = self.read_sheet(read_task, tpl_sha)["beta_lo"]

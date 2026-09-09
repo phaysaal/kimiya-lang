@@ -670,6 +670,37 @@ grep -q "^The deadline moved to Friday" <<<"$msc" \
 grep -q "('select:k_ev', 0.6)" <<<"$msc" \
   || { echo "FAIL: compiled model select pricing"; echo "$msc"; exit 1; }
 
+echo "== the union form: a mechanical closure plus a judged retrieval =="
+# The paper's §2 assembles a coverage claim from an enumerable closure
+# (recall 1) and a calibrated retrieval, split over two lines. Both the
+# continuation line and `select` inside the `+` must parse.
+cat > union.kim <<'KIM'
+pool A = "llama3.1:8b"
+context k_fact:
+    domain     = "whether evidence supports a stated fact"
+    preserve   = [factual_support]
+    allow_loss = [phrasing]
+Own := ["own export"]
+Web := ["public page", "unrelated"]
+bundle := Own
+        + select<0.95>("footprint", Web) under k_fact
+check len(bundle) > 0
+commit(bundle)
+KIM
+uout=$(KIMIYA_MOCK=1 python3 -m kimiya run union.kim)
+grep -q "COMMITTED" <<<"$uout" || { echo "FAIL: union form"; echo "$uout"; exit 1; }
+grep -q "select:k_fact" <<<"$uout" \
+  || { echo "FAIL: the judged half of a union must keep its own factor"; exit 1; }
+python3 - <<'PYU' || { echo "FAIL: union elaboration"; exit 1; }
+from kimiya.parser import parse
+import kimiya.ast_nodes as A
+body = parse(open("union.kim").read()).body
+sels = [s for s in body if isinstance(getattr(s, "rhs", None), A.SelectExpr)]
+assert len(sels) == 1, "the select must be bound as its own instruction"
+names = [getattr(s, "name", None) for s in body]
+assert names.index(sels[0].name) < names.index("bundle"), names
+PYU
+
 echo "== dom world: bridge-driven webview, priced locate, gated emit =="
 cp "$OLDPWD_REPO/examples/linkedin_collect_dom.kim" .
 cp "$OLDPWD_REPO/tests/fixtures/dom_snapshot.json" .

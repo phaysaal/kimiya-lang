@@ -16,6 +16,30 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.12.0 — 2026-09-09
+- **Fix (cost):** one `gen` statement may cost several provider calls.
+  `run_gen` resamples on a schema miss, up to its attempt budget, but
+  the meter incremented `gen_calls` once per *statement*, so a run that
+  bought validity by resampling reported a price it did not pay. That is
+  the first of the two silent-cost bugs the paper says budgets exclude
+  by construction ("a generator that resamples until valid inside a
+  nominal unit cost"). `run_gen` now takes a `meter` callback and bills
+  once per call; both runtimes pass it. Certificates for programs whose
+  schemas ever miss will report a higher, truthful `gen` count.
+- **The union form** of the paper's §2: an rhs may combine a mechanical
+  closure or enumerable source with a judged retrieval,
+  `bundle := Own + select<0.95>(q, Web) under k`. `select` remains an
+  instruction and never an expression -- the surface `+` binds each
+  retrieval to its own name before the union reads it, so every
+  retrieval keeps its own θ factor and its own datasheet. A `+` followed
+  by `select` therefore ends expression parsing rather than failing in
+  it.
+- **Continuation lines:** a line opening with `+` or `-` continues the
+  line above instead of starting a block, which is how the paper's
+  listings wrap a union so each half can carry its own comment.
+- Together these make two programs parse that previously could not: §2
+  of the paper, and the privacy case study published on kimiya.dev.
+
 ## 1.11.0 — 2026-09-09
 - **Datasheets bind to prompt templates.** A read sheet may carry the
   `template_sha` it was measured under (`kimiya datasheet` preserves it;

@@ -12,7 +12,7 @@ world effect announced and audited, and every run ends in an explicit
 outcome: a
 **certificate** on commit, or a visible **⚡ abstention** — never silence.
 
-**Version: 1.11.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
+**Version: 1.12.0 (pre-stable — see [CHANGELOG.md](CHANGELOG.md) for every version and every breaking change).** MAJOR.MINOR.PATCH; until 2.0 the
 language surface may change between MINOR versions. Every certificate
 records the version that produced it (`kimiya : v1.4.0`; compiled runs
 also record the compiler version, and an artifact refuses to run across
@@ -968,6 +968,11 @@ cp -r editors/vscode-kimiya ~/.vscode/extensions/
 
 ## Honest limitations (v0.1)
 
+- A `select` may be combined with an enumerable source on one rhs
+  (`bundle := Own + select<0.95>(q, Web) under k`, since 1.12), which is
+  the paper's §2 coverage split: recall 1 on the enumerable half, a
+  measured recall on the judged half. Each half keeps its own factor;
+  the certificate does not merge them into a single claim.
 - Text `select` without `by` is a keyword filter — a weak retriever;
   `by A` (since 1.11) consults a model instead. Both are priced at the
   `select:<purpose>` datasheet's conservative end, prior-grade until

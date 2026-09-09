@@ -66,4 +66,29 @@ assert rec["channel"] == "chan" and rec["value_len"] == 14
 assert "topsecretvalue" not in str(rec)
 del os.environ["KIMIYA_DOM"]
 
+# --- gen metering: one statement may cost several provider calls ---
+# run_gen resamples on a schema miss. Billing the statement rather than
+# the calls is the silent-cost bug the paper excludes by construction:
+# "a generator that resamples until valid inside a nominal unit cost".
+import tempfile  # noqa: E402
+from kimiya.runtime import run_gen, Trace, MockOracle  # noqa: E402
+
+
+class _NeverValid(MockOracle):
+    def complete(self, *a, **k):
+        return "not a json object at all"
+
+
+_calls = []
+_trace = Trace(pathlib.Path(tempfile.mkdtemp()))
+_agent = Agent(name="A", model="llama3.1:8b")
+assert run_gen(_NeverValid(), _trace, _agent, "p", ["x"], budget=3,
+               meter=lambda: _calls.append(1)) is None
+assert len(_calls) == 3, ("a 3-attempt schema miss must bill 3 calls",
+                          len(_calls))
+_calls.clear()
+run_gen(MockOracle(), _trace, _agent, "p", ["x"],
+        meter=lambda: _calls.append(1))
+assert len(_calls) == 1, len(_calls)
+
 print("backend wiring ok")

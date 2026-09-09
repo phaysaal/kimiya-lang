@@ -380,14 +380,18 @@ class Interp:
                                                            tpl_sha, g.line)
                                            ["beta_lo"]))
                 return ent["value"]
-        self.cost["gen_calls"] += 1
+        # One statement, possibly several provider calls: a schema miss
+        # is resampled inside run_gen, and the meter counts what was
+        # actually spent.
+        def bill():
+            self.cost["gen_calls"] += 1
         if fields == []:
             out = run_gen(self.oracle, self.trace, agent,
                           prompt + "\n\nFIELDS: result", ["result"],
-                          images=image_paths)
+                          images=image_paths, meter=bill)
         else:
             out = run_gen(self.oracle, self.trace, agent, prompt, fields,
-                          images=image_paths)
+                          images=image_paths, meter=bill)
         factor = None
         if read_task and out is not None:
             factor = self.read_sheet(read_task, tpl_sha, g.line)["beta_lo"]

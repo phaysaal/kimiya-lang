@@ -51,6 +51,22 @@ def lex(source: str) -> list[Token]:
         if "\t" in line[: len(line) - len(line.lstrip())]:
             raise LexError(f"line {ln}: tabs are not allowed in indentation")
         indent = len(line) - len(line.lstrip(" "))
+        # A line that opens with a binary operator continues the line
+        # above rather than starting a block. The paper's §2 writes the
+        # affected-set as a mechanical closure `+` a judged retrieval,
+        # split across lines so each carries its own comment:
+        #
+        #     frontier := Corpus.cites_closure(holdings.doctrines)
+        #               + select<0.95>(relevant_to(holdings), Corpus)
+        #
+        # so that indent is layout, not structure.
+        if tokens and indent > indents[-1] \
+                and line.lstrip(" ").startswith(("+ ", "- ")):
+            if tokens[-1].kind == "NEWLINE":
+                tokens.pop()
+            _lex_line(line.strip(), ln, indent, tokens)
+            tokens.append(Token("NEWLINE", "", ln, len(line)))
+            continue
         if indent > indents[-1]:
             indents.append(indent)
             tokens.append(Token("INDENT", "", ln, 0))
