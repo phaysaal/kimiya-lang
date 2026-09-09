@@ -7,3 +7,6 @@ examples/*.py
 !examples/guiprobe.py
 !examples/collabdb.py
 !examples/bizlib.py
+
+# stray build artifacts: release zips are built into ../kimiya-web/downloads
+*.zip
