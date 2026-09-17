@@ -20,9 +20,11 @@ declared recall stays in the source as the programmer's coverage claim
 and is *checked against* the measured β; claiming more than the
 instrument has been shown to deliver is a warning on every run.
 
-**Coordinates are absolute.** Boxes come back normalized to the captured
-image; they are mapped through the capture's origin so a click lands
-where the control actually is. On a multi-monitor layout the capture
+**Coordinates are absolute.** Boxes are normalised to image pixels
+(`BOX_CONVENTIONS`: a family's native form, such as Gemini's
+`[ymin, xmin, ymax, xmax]` on a 0..1000 grid, is converted first) and
+then mapped through the capture's origin so a click lands where the
+control actually is. On a multi-monitor layout the capture
 origin is not (0, 0), and getting this wrong is a click in the wrong
 window, not a visible error.
 
@@ -131,6 +133,7 @@ class LocateCache:
         self._d[self.key(task, shot, description)] = {
             "boxes": [{"box": list(p["box"]), "label": p["label"],
                        "confidence": p["confidence"]} for p in parsed],
+            "units": "px",
             "sha": shot.get("sha", ""),
             "agent": agent_label,
             "ts": time.time(),
@@ -203,6 +206,30 @@ def _to_pixels(box, shot: dict) -> dict:
     }
 
 
+# How a family writes a box. The prompt asks for image pixels [x0, y0, x1, y1];
+# most families comply, Gemini answers in its native form regardless: [ymin,
+# xmin, ymax, xmax] on a 0..1000 grid. A convention is a property of the
+# family, so it is applied by family, before caching and before any pixel is
+# mapped through the capture origin. (Measured 2026-09-17 on a 1312x1105
+# capture with OCR ground truth: gpt-5.6 luna pixel-exact; gemini-2.5-flash
+# exact once converted; grok-4.6, llama-4-maverick and qwen3-vl returned
+# boxes in no consistent unit — a locate by those is an instrument reading
+# that the datasheet, not this table, has to price.)
+BOX_CONVENTIONS = {
+    "google": "yxyx_1000",
+}
+
+
+def image_pixels(box, family: str, width: int, height: int):
+    """Normalise a family's box form to image pixels [x0, y0, x1, y1]."""
+    conv = BOX_CONVENTIONS.get(family or "", "xyxy_px")
+    if conv == "yxyx_1000" and width and height:
+        y0, x0, y1, x1 = box
+        return (x0 * width / 1000.0, y0 * height / 1000.0,
+                x1 * width / 1000.0, y1 * height / 1000.0)
+    return tuple(box)
+
+
 def _build_hits(parsed: list, shot: dict) -> list[dict]:
     hits = []
     for p in parsed:
@@ -239,6 +266,11 @@ def locate(oracle, agent, trace, shot: dict, description: str,
                 "once before replaying")
         source = "replay"         # layout-stability assumption, disclosed
 
+    if source and ent.get("units") != "px" and \
+            BOX_CONVENTIONS.get(agent.family):
+        # cached before conventions existed, by a family that needs one:
+        # the boxes are in the model's units, not pixels — read live again
+        source = None
     if source:
         assert ent is not None
         parsed = [{"box": tuple(b["box"]), "label": b["label"],
@@ -264,6 +296,9 @@ def locate(oracle, agent, trace, shot: dict, description: str,
     except (OSError, RuntimeError) as e:
         out, err = "", str(e)[:200]
     parsed = _parse_boxes(out)
+    conv = BOX_CONVENTIONS.get(agent.family, "xyxy_px")
+    for p in parsed:
+        p["box"] = image_pixels(p["box"], agent.family, w, h)
     hits = _build_hits(parsed, shot)
     if cache and parsed and not err:
         cache.put(task, shot, description, parsed, agent.label())
@@ -274,5 +309,6 @@ def locate(oracle, agent, trace, shot: dict, description: str,
                   "capture_origin": [shot.get("x"), shot.get("y")],
                   "capture_size": [shot.get("width"), shot.get("height")],
                   "agent": agent.label(), "hits": hits,
+                  "box_convention": conv,
                   **({"error": err} if err else {})})
     return hits, "live"

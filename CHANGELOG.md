@@ -16,6 +16,27 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.13.1 — 2026-09-17
+- **Fix (vision):** a locate by a Gemini model landed in the wrong place.
+  The locator prompt asks for image pixels `[x0, y0, x1, y1]`; Gemini
+  answers in its native form regardless, `[ymin, xmin, ymax, xmax]` on a
+  0..1000 grid, and the runtime mapped those numbers through the capture
+  origin as if they were pixels — exactly the silent wrong-place failure
+  `vision.py` warns about. Box form is a property of the model family, so
+  `vision.BOX_CONVENTIONS` now names it per family (`google: yxyx_1000`)
+  and `image_pixels()` normalises every parsed box to image pixels before
+  caching and before the origin mapping. The trace's `locate` record says
+  which convention applied (`box_convention`).
+- **Cache:** locate entries now carry `units: "px"`; an older entry
+  written by a family that needs a convention is read live again instead
+  of being replayed in the model's units.
+- **Measured, for the record** (1312×1105 capture, OCR ground truth for
+  two link boxes): `gpt-5.6-luna` pixel-exact; `gemini-2.5-flash` exact
+  after conversion; `grok-4.6`, `llama-4-maverick`, `qwen3-vl` returned
+  boxes in no consistent unit. A convention table can fix the first kind
+  of error, not the second — that is what the `locate:` datasheet prices.
+- No breaking change.
+
 ## 1.13.0 — 2026-09-17
 - **New (screen):** `act screen.move(x, y)` — a hover. The pointer travels
   and no button is pressed: what a human does to read where a link goes
