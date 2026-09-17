@@ -524,6 +524,7 @@ act screen.key("Return")             -- keysym or chord: "ctrl+a"
 act screen.drag(x1, y1, x2, y2)
 act screen.scroll(x, y, ticks)       -- negative ticks scroll up
 act screen.move(x, y)                -- hover: pointer only, no button (recoverable)
+act screen.focus(window_id)          -- raise and focus a window by X id (recoverable)
 
 check row_count("talks", name) == 1  -- the verified gate...
 act screen.confirm(x, y)             -- ...for the click that commits

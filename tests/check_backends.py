@@ -49,6 +49,9 @@ del os.environ["KIMIYA_SCREEN"]
 # --- move (hover): a pointer-only act, recoverable, arity 2 ---
 assert ("screen", "move") in KNOWN_ACTIONS
 assert ACTION_ARITY[("screen", "move")] == 2
+assert ("screen", "focus") in KNOWN_ACTIONS
+assert ACTION_ARITY[("screen", "focus")] == 1
+assert ("screen", "focus") not in DEFAULT_IRREVERSIBLE
 assert ("screen", "move") not in DEFAULT_IRREVERSIBLE and "move" not in screen.IRREVERSIBLE
 assert screen.plan("move", [40, 60]) == [["mousemove", "40", "60"]], "a hover presses no button"
 os.environ["KIMIYA_SCREEN"] = "none"

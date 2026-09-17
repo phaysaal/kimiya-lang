@@ -77,6 +77,7 @@ ACTIONS: dict[str, int] = {
     "drag": 4,       # x1, y1, x2, y2
     "scroll": 3,     # x, y, ticks   (negative ticks scroll up)
     "move": 2,       # x, y          (hover: pointer only, no button; recoverable)
+    "focus": 1,      # window id     (raise and focus a window; recoverable)
 }
 
 # Acts whose effect class defaults to irreversible for this surface.
@@ -214,6 +215,16 @@ def plan(action: str, args: list) -> list[list[str]]:
         # open), so freshness and the world-frame rule apply as to any act.
         x, y = _num(args[0], action, 0), _num(args[1], action, 1)
         return [["mousemove", str(x), str(y)]]
+    if action == "focus":
+        # Raise and focus a window by X id. A program that reads a window
+        # must name which one: "the active window" is whatever happened to
+        # be on top when the run began, and on a busy desktop that is the
+        # terminal the run was started from.
+        try:
+            wid = int(float(args[0]))
+        except (TypeError, ValueError):
+            raise ScreenError(f"screen.focus takes a window id, got {args[0]!r}") from None
+        return [["windowactivate", "--sync", str(wid)]]
     if action == "type":
         return [["type", "--clearmodifiers", "--delay", "12", str(args[0])]]
     if action == "paste":
@@ -379,8 +390,22 @@ def perform(action: str, args: list, disp: Display | None = None) -> dict:
         # Delivery contract: never press a button at an unverified point.
         if cmd[0] == "mousemove":
             _verify_pointer(disp, int(cmd[-2]), int(cmd[-1]))
+        # …and never report a focus the window manager did not grant.
+        if cmd[0] == "windowactivate":
+            _verify_focus(disp, cmd[-1])
     rec["delivered"] = True
     return rec
+
+
+def _verify_focus(disp: Display, wid: str) -> None:
+    out = disp.run(["xdotool", "getactivewindow"])
+    got = out.stdout.decode(errors="replace").strip()
+    if got != wid:
+        raise ScreenError(
+            f"window {wid} did not receive focus on {disp.label} — the "
+            f"active window is {got or 'unknown'} (the window manager may "
+            "refuse focus steals; the window may be minimised or on "
+            "another desktop)")
 
 
 def _trace_arg(a):

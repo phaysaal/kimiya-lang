@@ -16,6 +16,18 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.14.0 — 2026-09-17
+- **New (screen):** `act screen.focus(window_id)` — raise and focus a
+  window by X id (`xdotool windowactivate --sync`), recoverable, arity 1.
+  A program that reads a window must be able to name which one: "the
+  active window" is whatever happened to be on top when the run began,
+  and on a busy desktop that is the terminal the run was started from.
+  Delivery is verified like a pointer move — the active window is read
+  back and a refused focus (minimised window, another desktop, a window
+  manager that blocks focus steals) is an error, not a silent read of
+  the wrong window.
+- No breaking change.
+
 ## 1.13.1 — 2026-09-17
 - **Fix (vision):** a locate by a Gemini model landed in the wrong place.
   The locator prompt asks for image pixels `[x0, y0, x1, y1]`; Gemini
