@@ -76,6 +76,7 @@ ACTIONS: dict[str, int] = {
     "key": 1,        # keysym or chord, e.g. "Return", "ctrl+a"
     "drag": 4,       # x1, y1, x2, y2
     "scroll": 3,     # x, y, ticks   (negative ticks scroll up)
+    "move": 2,       # x, y          (hover: pointer only, no button; recoverable)
 }
 
 # Acts whose effect class defaults to irreversible for this surface.
@@ -206,6 +207,13 @@ def plan(action: str, args: list) -> list[list[str]]:
     if action in ("click", "confirm"):
         x, y = _num(args[0], action, 0), _num(args[1], action, 1)
         return [["mousemove", str(x), str(y)], ["click", "1"]]
+    if action == "move":
+        # A hover: the pointer travels, no button is pressed. What a
+        # human does to read a link's target from the status bar without
+        # committing to it. Still a world effect (tooltips appear, menus
+        # open), so freshness and the world-frame rule apply as to any act.
+        x, y = _num(args[0], action, 0), _num(args[1], action, 1)
+        return [["mousemove", str(x), str(y)]]
     if action == "type":
         return [["type", "--clearmodifiers", "--delay", "12", str(args[0])]]
     if action == "paste":

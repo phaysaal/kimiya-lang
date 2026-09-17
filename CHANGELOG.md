@@ -16,6 +16,23 @@ surface may change between MINOR versions. The compatibility contract:
   `compiled_with` since 1.4.0), so results are attributable to a
   language state.
 
+## 1.13.0 — 2026-09-17
+- **New (screen):** `act screen.move(x, y)` — a hover. The pointer travels
+  and no button is pressed: what a human does to read where a link goes
+  from the status bar without committing to it. Recoverable by default,
+  arity 2, delivered through `xdotool mousemove` with the same pointer
+  read-back as a click. It is still a world effect (tooltips appear, menus
+  open), so freshness and the world-frame rule for loops apply unchanged.
+- **New (dom):** snapshot nodes carry `href` — the anchor's resolved
+  absolute target, `""` for non-links. Hosts fill it (`docs/dom_bridge.md`);
+  the `dom` locator's candidate lines show it; `DOM_NODE` has the field.
+  Motivation: a phishing check compares the *displayed* target with the
+  *actual* one, and the actual one is the single fact pixels cannot show.
+  With `href` that comparison is a `check` inside the webview; on the
+  screen surface it needs `screen.move` plus a read of the status bar.
+- No breaking change. Programs, artifacts and on-disk formats from 1.12
+  run unchanged; nodes from older hosts get `href: ""`.
+
 ## 1.12.0 — 2026-09-09
 - **Fix (cost):** one `gen` statement may cost several provider calls.
   `run_gen` resamples on a schema miss, up to its attempt budget, but

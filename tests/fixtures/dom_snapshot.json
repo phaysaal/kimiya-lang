@@ -2,7 +2,7 @@
   "text": "Faisal Al Ameen\nLanguage designer — Kimiya: auditable semantic computation\nDhaka, Bangladesh · Contact info\nDOMSENTINEL9 harvested-profile marker: this exact token must never appear in a certificate or trace.\nAbout\nBuilds program logics where every LLM answer arrives with a certificate or a visible abstention.\nExperience\nKimiya — designer, 2026-present\nActivity\nPosted: retrieval is priced like everything else.\nAnalytics — Private to you",
   "nodes": [
     {"selector": "button[aria-label='Dismiss']", "role": "button", "text": "Not now", "visible": true},
-    {"selector": "a[href='/in/me/']", "role": "link", "text": "View profile", "visible": true},
+    {"selector": "a[href='/in/me/']", "role": "link", "text": "View profile", "visible": true, "href": "https://www.linkedin.com/in/me/"},
     {"selector": "button[aria-label='Open to']", "role": "button", "text": "Open to", "visible": true},
     {"selector": "main.scaffold-layout__main", "role": "main", "text": "Profile body", "visible": true},
     {"selector": "footer .legal", "role": "contentinfo", "text": "Legal", "visible": false}

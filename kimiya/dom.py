@@ -258,7 +258,10 @@ def _finish_snapshot(base: dict, text: str, nodes: list) -> dict:
         clean.append({"selector": str(n.get("selector", "")),
                       "role": str(n.get("role", "")),
                       "text": str(n.get("text", "")),
-                      "visible": bool(n.get("visible", True))})
+                      "visible": bool(n.get("visible", True)),
+                      # The one thing pixels cannot show: where an anchor
+                      # really goes. Hosts fill it for links; "" otherwise.
+                      "href": str(n.get("href", "") or "")})
     ident = text + "".join(n["selector"] for n in clean)
     base.update({"text": text, "nodes": clean, "exists": True,
                  "sha": hashlib.sha256(ident.encode()).hexdigest()[:12]})
@@ -406,9 +409,12 @@ class DomLocateCache:
 
 
 def _candidate_line(x: dict) -> str:
-    return (f"selector={x['selector']!r} role={x['role']!r} "
+    line = (f"selector={x['selector']!r} role={x['role']!r} "
             f"text={_retrieval.truncate(x['text'], 120)!r} "
             f"visible={x['visible']}")
+    if x.get("href"):
+        line += f" href={_retrieval.truncate(str(x['href']), 160)!r}"
+    return line
 
 
 def locate(oracle, agent, trace, snap: dict, description: str,

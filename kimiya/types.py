@@ -117,7 +117,8 @@ CONTROL = RecordTy(
 # One element of a DOM snapshot; what a `select` over one yields. The
 # selector is ready to hand to `act dom.click`.
 DOM_NODE = RecordTy(
-    {"selector": TEXT, "role": TEXT, "text": TEXT, "visible": BOOL},
+    {"selector": TEXT, "role": TEXT, "text": TEXT, "visible": BOOL,
+     "href": TEXT},                     # anchors: the real target; "" otherwise
     origin="dom node")
 
 # `observe dom(...)`: the page as text plus candidate elements.

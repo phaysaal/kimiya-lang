@@ -46,6 +46,27 @@ assert rec["delivered"] is False
 assert rec["args"][0].endswith("…") and len(rec["args"][0]) <= 201
 del os.environ["KIMIYA_SCREEN"]
 
+# --- move (hover): a pointer-only act, recoverable, arity 2 ---
+assert ("screen", "move") in KNOWN_ACTIONS
+assert ACTION_ARITY[("screen", "move")] == 2
+assert ("screen", "move") not in DEFAULT_IRREVERSIBLE and "move" not in screen.IRREVERSIBLE
+assert screen.plan("move", [40, 60]) == [["mousemove", "40", "60"]], "a hover presses no button"
+os.environ["KIMIYA_SCREEN"] = "none"
+assert screen.perform("move", [40, 60])["delivered"] is False
+del os.environ["KIMIYA_SCREEN"]
+
+# --- dom nodes carry href; the locator shows it; missing -> "" ---
+from kimiya import dom  # noqa: E402
+snap = dom._finish_snapshot({}, "t", [
+    {"selector": "a.v", "role": "link", "text": "Verify", "visible": True,
+     "href": "https://secure-login.example.ru/v"},
+    {"selector": "button#ok", "role": "button", "text": "OK"}])
+assert snap["nodes"][0]["href"] == "https://secure-login.example.ru/v"
+assert snap["nodes"][1]["href"] == ""
+assert "href=" in dom._candidate_line(snap["nodes"][0]) and "href=" not in dom._candidate_line(snap["nodes"][1])
+from kimiya.types import DOM_NODE  # noqa: E402
+assert "href" in DOM_NODE.fields
+
 # --- dom: derived layers stay in sync with dom.ACTIONS ---
 from kimiya import dom  # noqa: E402
 

@@ -10,3 +10,7 @@ examples/*.py
 
 # stray build artifacts: release zips are built into ../kimiya-web/downloads
 *.zip
+
+# secrets: API keys live in .env files, never in the tree
+.env
+**/.env

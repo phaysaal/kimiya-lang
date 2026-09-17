@@ -61,10 +61,18 @@ its contract handles or which propagates to a visible ⚡ abstention.
 { "op": "snapshot", "selector": null }
   → { "ok": true, "text": "<innerText of selector or main/body>",
       "nodes": [ { "selector": "button[aria-label='Me']",
-                   "role": "button", "text": "Me", "visible": true }, …
+                   "role": "button", "text": "Me", "visible": true,
+                   "href": "" },
+                 { "selector": "a.verify", "role": "link",
+                   "text": "Verify your account", "visible": true,
+                   "href": "https://secure-login.example.ru/v" }, …
     ] }
 // Node selectors SHOULD be stable and unique enough to re-resolve; the
 // client hands them back verbatim in click/fill/press ops.
+// `href` (since 1.13.0) MUST be the anchor's resolved absolute target for
+// link nodes and "" for everything else. It is the one fact about a link
+// that pixels cannot show, and the reason a display-text-versus-target
+// comparison can be a `check` in the webview and only a judgment elsewhere.
 
 // observation — observe view()
 { "op": "screenshot" }
