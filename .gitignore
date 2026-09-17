@@ -14,3 +14,4 @@ examples/*.py
 # secrets: API keys live in .env files, never in the tree
 .env
 **/.env
+case_study/
